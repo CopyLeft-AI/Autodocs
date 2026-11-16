@@ -17,6 +17,8 @@ from lxml import etree
 import httpx
 
 SUMMARY_WORD_LIMIT = int(os.getenv("SUMMARY_WORD_LIMIT", "50"))
+LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").lower()
+LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "").rstrip("/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL1_NAME = os.getenv("MODEL1_NAME", "gpt-oss:20b")
 MODEL1_REASONING_EFFORT = os.getenv("MODEL1_REASONING_EFFORT", "low")
@@ -280,6 +282,28 @@ def parse_depth_summary_pairs(text: str) -> List[Tuple[int, str]]:
 
 
 async def generate(client: httpx.AsyncClient, instruction: str) -> str:
+    if LLM_BACKEND == "llamacpp":
+        if not LLAMACPP_BASE_URL:
+            raise ValueError("LLAMACPP_BASE_URL must be configured")
+
+        resp = await client.post(
+            f"{LLAMACPP_BASE_URL}/chat/completions",
+            json={
+                "model": MODEL1_NAME,
+                "messages": [{"role": "user", "content": instruction}],
+                "stream": False,
+                "temperature": 0.0,
+                "max_tokens": MAX_NEW_TOKENS,
+                "repeat_penalty": 1.2,
+            },
+            timeout=600.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"] or ""
+
+    if LLM_BACKEND != "ollama":
+        raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")
+
     resp = await client.post(
         f"{OLLAMA_URL}/api/chat",
         json={

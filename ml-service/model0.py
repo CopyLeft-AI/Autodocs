@@ -31,6 +31,8 @@ CHUNK_RE = re.compile(r"<(user_input|system_output)\b[^>]*?(?:/>|>.*?</\1>)", fl
 TIME_RE = re.compile(r'timestamp="([\d\.]+)"')
 
 WINDOW_SIZE = 15
+LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").lower()
+LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "").rstrip("/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL0_NAME = os.getenv("MODEL0_NAME", "model0")
 # Ollama's default n_threads is 1 unless told otherwise -- verified via
@@ -154,6 +156,30 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
     <|im_start|>/<|im_sep|>/<|im_end|> tokens from training are sent as-is,
     bypassing Ollama's own chat templating.
     """
+    if LLM_BACKEND == "llamacpp":
+        if not LLAMACPP_BASE_URL:
+            raise ValueError("LLAMACPP_BASE_URL must be configured")
+
+        resp = await client.post(
+            f"{LLAMACPP_BASE_URL}/completions",
+            json={
+                "model": MODEL0_NAME,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": 0,
+                "top_k": 1,
+                "top_p": 1.0,
+                "repeat_penalty": 1.0,
+                "max_tokens": 32,
+            },
+            timeout=300.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["text"].strip().lower()
+
+    if LLM_BACKEND != "ollama":
+        raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")
+
     resp = await client.post(
         f"{OLLAMA_URL}/api/generate",
         json={
