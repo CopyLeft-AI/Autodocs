@@ -34,6 +34,11 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
     const [isProcessingModeResolved, setIsProcessingModeResolved] = useState(false);
     const fileInputReference = useRef<HTMLInputElement>(null);
     const notifiedJobReference = useRef<string | null>(null);
+    const onUploadSuccessReference = useRef(onUploadSuccess);
+
+    useEffect(() => {
+        onUploadSuccessReference.current = onUploadSuccess;
+    }, [onUploadSuccess]);
 
     const pollJob = useCallback(async (jobId: string): Promise<void> => {
         const url = `/api/terminal-session-jobs/${encodeURIComponent(jobId)}`;
@@ -69,6 +74,11 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
         const nextJob = body.job as MlJobStatus;
         setJob(nextJob);
 
+        if (nextJob.status === 'queued' || nextJob.status === 'running') {
+            setErrorMessage(null);
+            setUploadState('processing');
+        }
+
         if (nextJob.status === 'failed') {
             setErrorMessage(nextJob.error ?? 'Analysis failed.');
             setUploadState('error');
@@ -79,10 +89,10 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
 
             if (notifiedJobReference.current !== jobId) {
                 notifiedJobReference.current = jobId;
-                onUploadSuccess?.();
+                onUploadSuccessReference.current?.();
             }
         }
-    }, [onUploadSuccess]);
+    }, []);
 
     useEffect(() => {
         let isDisposed = false;
@@ -114,6 +124,12 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
                     return;
                 }
 
+                if (response.status === 404) {
+                    // Older deployments may not provide the job-status API.
+                    if (!isDisposed) setIsProcessingModeResolved(true);
+                    return;
+                }
+
                 if (!response.ok) {
                     throw new Error(`Could not resume job (${response.status}).`);
                 }
@@ -133,14 +149,21 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
                         setErrorMessage(body.job.error ?? 'Analysis failed.');
                         setUploadState('error');
                     } else if (body.job.status === 'completed') {
-                        setUploadState('success');
+                        // The detail endpoint persists completed results in PostgreSQL.
+                        // This is also needed after the browser was closed during analysis.
+                        await pollJob(body.job.id);
                     } else {
                         setUploadState('processing');
                     }
                 }
-            } catch {
-                // Legacy deployments do not require the job status endpoint.
+            } catch (error) {
                 if (!isDisposed) {
+                    setErrorMessage(
+                        error instanceof Error
+                            ? error.message
+                            : 'Could not restore analysis status.',
+                    );
+                    setUploadState('error');
                     setIsProcessingModeResolved(true);
                 }
             }
@@ -151,7 +174,7 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
         return () => {
             isDisposed = true;
         };
-    }, []);
+    }, [pollJob]);
 
     useEffect(() => {
         if (!job || authenticationExpired || ['completed', 'failed'].includes(job.status)) {
