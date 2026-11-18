@@ -172,7 +172,12 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
                 "repeat_penalty": 1.0,
                 "max_tokens": 32,
             },
-            timeout=300.0,
+            timeout=httpx.Timeout(
+                connect=30.0,
+                read=float(os.getenv("LLAMACPP_MODEL0_TIMEOUT_SECONDS", "3600")),
+                write=120.0,
+                pool=30.0,
+            ),
         )
         resp.raise_for_status()
         data = resp.json()

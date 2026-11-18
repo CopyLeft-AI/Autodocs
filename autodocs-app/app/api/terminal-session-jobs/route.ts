@@ -35,8 +35,16 @@ export async function GET(request: NextRequest) {
   const user = await getRequestUser(request);
   if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   if (!isLocalCpuJobsEnabled()) return NextResponse.json({ enabled: false, job: null });
-  const result = await db.query<{ id: string }>(`SELECT id FROM terminal_session_jobs WHERE user_id = $1 AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1`, [user.id]);
+  const result = await db.query<{ id: string }>(`SELECT id FROM terminal_session_jobs WHERE user_id = $1 AND status IN ('queued', 'running', 'failed') ORDER BY created_at DESC LIMIT 1`, [user.id]);
   if (!result.rows[0]) return NextResponse.json({ enabled: true, job: null });
-  try { return NextResponse.json({ enabled: true, job: await readMlJob(result.rows[0].id) }); }
-  catch { return NextResponse.json({ enabled: true, job: null }); }
+  try {
+    const job = await readMlJob(result.rows[0].id);
+    await db.query(
+      `UPDATE terminal_session_jobs SET status = $2, progress_percent = $3, error_message = $4, updated_at = NOW() WHERE id = $1 AND user_id = $5`,
+      [job.id, job.status, job.percent, job.error, user.id],
+    );
+    return NextResponse.json({ enabled: true, job });
+  } catch {
+    return NextResponse.json({ enabled: true, job: null });
+  }
 }

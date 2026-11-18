@@ -286,20 +286,47 @@ async def generate(client: httpx.AsyncClient, instruction: str) -> str:
         if not LLAMACPP_BASE_URL:
             raise ValueError("LLAMACPP_BASE_URL must be configured")
 
-        resp = await client.post(
+        chunks: list[str] = []
+        truncated = False
+
+        async with client.stream(
+            "POST",
             f"{LLAMACPP_BASE_URL}/chat/completions",
             json={
                 "model": MODEL1_NAME,
                 "messages": [{"role": "user", "content": instruction}],
-                "stream": False,
+                "stream": True,
                 "temperature": 0.0,
                 "max_tokens": MAX_NEW_TOKENS,
                 "repeat_penalty": 1.2,
             },
-            timeout=600.0,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"] or ""
+            timeout=httpx.Timeout(
+                connect=30.0,
+                read=1800.0,
+                write=30.0,
+                pool=30.0,
+            ),
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                packet = json.loads(data)
+                for choice in packet.get("choices", []):
+                    if choice.get("finish_reason") == "length":
+                        truncated = True
+                    content = choice.get("delta", {}).get("content")
+                    if isinstance(content, str):
+                        chunks.append(content)
+
+        if truncated:
+            raise RuntimeError(
+                "llama.cpp reached max_tokens before completing the response."
+            )
+        return "".join(chunks)
 
     if LLM_BACKEND != "ollama":
         raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")
@@ -342,6 +369,7 @@ async def annotate_events(
 
     for upto in range(len(events)):
         success = False
+        invalid_response_seen = False
         text = ""
         pkg: Dict = {}
 
@@ -350,14 +378,21 @@ async def annotate_events(
             instr = build_instruction(pkg)
             try:
                 text = await generate(client, instr)
-                success = True
-                break
+                if parse_depth_summary_pairs(text):
+                    success = True
+                    break
+                invalid_response_seen = True
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in (400, 413) or "context" in e.response.text.lower():
                     continue
                 raise
 
         if not success:
+            if invalid_response_seen:
+                raise RuntimeError(
+                    f"Model 1 returned no valid annotation JSON for event {upto} "
+                    "after all attempts."
+                )
             text = '{"annotation": "Event payload too large for context window.", "depth": 0}'
 
         pairs = parse_depth_summary_pairs(text)
