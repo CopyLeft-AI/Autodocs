@@ -175,7 +175,19 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
             timeout=300.0,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["text"].strip().lower()
+        data = resp.json()
+        if isinstance(data, dict) and "choices" in data:
+            return data["choices"][0]["text"].strip().lower()
+        if isinstance(data, dict) and isinstance(data.get("content"), str):
+            return data["content"].strip().lower()
+        raise RuntimeError(
+            "Unexpected llama.cpp completion response: "
+            + (
+                f"JSON keys={list(data)}"
+                if isinstance(data, dict)
+                else f"JSON type={type(data).__name__}"
+            )
+        )
 
     if LLM_BACKEND != "ollama":
         raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")
