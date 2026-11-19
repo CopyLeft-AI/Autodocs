@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Gauge, KeyRound } from 'lucide-react';
+import { InferenceSettingsCard } from '@/app/components/InferenceSettingsCard';
 
 const MASKED_PASSWORD = '........';
 
@@ -19,8 +20,9 @@ function ChangeButton({ onClick }: { onClick?: () => void }) {
 }
 
 interface ProcessingSettings {
-  remoteApiConcurrency: number;
-  limits: { min: number; max: number; default: number };
+  /** null: the user has no limit of their own and the service default applies. */
+  remoteApiConcurrency: number | null;
+  limits: { min: number; max: number };
   message?: string;
 }
 
@@ -39,7 +41,7 @@ function ProcessingSettingsCard() {
         if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
         const data = (await response.json()) as ProcessingSettings;
         setSaved(data);
-        setDraft(String(data.remoteApiConcurrency));
+        setDraft(data.remoteApiConcurrency === null ? '' : String(data.remoteApiConcurrency));
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load settings.');
       }
@@ -47,9 +49,9 @@ function ProcessingSettingsCard() {
     void load();
   }, []);
 
-  const parsed = Number(draft);
+  const parsed = draft.trim() === '' ? null : Number(draft);
   const limits = saved?.limits;
-  const isValid = Boolean(limits) && draft.trim() !== '' && Number.isInteger(parsed) && parsed >= (limits?.min ?? 1) && parsed <= (limits?.max ?? 32);
+  const isValid = Boolean(limits) && (parsed === null || Number.isInteger(parsed)) && (parsed === null || (parsed >= (limits?.min ?? 1) && parsed <= (limits?.max ?? 32)));
   const isUnchanged = saved !== null && parsed === saved.remoteApiConcurrency;
 
   const handleSave = async () => {
@@ -67,6 +69,7 @@ function ProcessingSettingsCard() {
       const data = (await response.json().catch(() => ({}))) as ProcessingSettings;
       if (!response.ok) throw new Error(data.message ?? `Request failed with status ${response.status}`);
       setSaved(data);
+      setDraft(data.remoteApiConcurrency === null ? '' : String(data.remoteApiConcurrency));
       setStatusMessage('Saved. It applies to analyses you start from now on.');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings.');
@@ -97,7 +100,7 @@ function ProcessingSettingsCard() {
           </label>
           <p className="mt-2 text-xs text-muted-foreground">
             How many requests one analysis sends at the same time when it uses a remote API
-            (default {limits?.default ?? 8}, from {limits?.min ?? 1} to {limits?.max ?? 32}). Analyses
+            (from {limits?.min ?? 1} to {limits?.max ?? 32}; leave empty to use the service default shown under Inference). Analyses
             that run on this machine ignore it and work one request at a time.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -109,6 +112,7 @@ function ProcessingSettingsCard() {
               max={limits?.max ?? 32}
               step={1}
               value={draft}
+              placeholder="default"
               disabled={!saved || isSaving}
               onChange={(event) => setDraft(event.target.value)}
               className="w-24 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:opacity-60"
@@ -200,6 +204,8 @@ export function SettingsPanel() {
       </div>
 
       <div className="space-y-5">
+        <InferenceSettingsCard />
+
         <ProcessingSettingsCard />
 
         <div className="bg-card rounded-xl border border-border p-6 hover:bg-accent/10 transition-colors">

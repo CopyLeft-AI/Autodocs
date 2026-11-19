@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 
 import httpx
 
@@ -11,6 +10,7 @@ import model0
 import model1
 import parser0
 from concurrency import effective_concurrency
+from config import load_config
 from event_stream import EventSplitter
 from job_control import JobControl
 from job_store import JobStore
@@ -29,7 +29,7 @@ class JobRunner:
 
     def __init__(self, store: JobStore, max_concurrent_jobs: int | None = None) -> None:
         self.store = store
-        self.max_concurrent_jobs = max_concurrent_jobs or int(os.getenv("AUTODOCS_MAX_CONCURRENT_JOBS", "2"))
+        self.max_concurrent_jobs = max_concurrent_jobs or load_config().max_concurrent_jobs
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.worker_tasks: list[asyncio.Task[None]] = []
         self.controls: dict[str, JobControl] = {}
@@ -110,7 +110,11 @@ class JobRunner:
 
         chunks = model0.extract_chunks(flat_xml)
         total_chunks = len(chunks)
-        parallel = effective_concurrency(state.get("requestedConcurrency"))
+        # Settings are read once per job, so editing the configuration never
+        # changes a job that is already running.
+        config = load_config()
+        boundary_step, annotate_step = config.steps["boundaries"], config.steps["annotate"]
+        parallel = effective_concurrency(state.get("requestedConcurrency"), boundary_step, config)
         await self.store.set_parallel_requests(job_id, parallel)
         mode = f" ({parallel} requests in parallel)" if parallel > 1 else ""
         await self.store.stage(job_id, "boundaries", total_chunks, f"Checking 0 of {total_chunks} terminal chunks for event boundaries{mode}.")
@@ -150,7 +154,7 @@ class JobRunner:
                     ready.put_nowait(event)
 
             try:
-                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint):
+                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint, boundary_step):
                     progress["chunks_done"] += 1
                     progress["boundaries"] += int(is_new)
                     hand_over(splitter.advance(chunk.ts, is_new))
@@ -167,7 +171,7 @@ class JobRunner:
 
         async def annotate_events_as_ready(client: httpx.AsyncClient) -> None:
             while (event := await ready.get()) is not None:
-                result = await model1.annotate_one(events, event.idx, client)
+                result = await model1.annotate_one(events, event.idx, client, annotate_step)
                 if result is not None:
                     predictions[event.idx] = result
                 await report_annotations()

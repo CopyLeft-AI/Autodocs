@@ -5,6 +5,45 @@ local Ollama-backed pipeline. It preserves the legacy `POST /` response
 contract, and additionally provides durable `/jobs` endpoints for the web
 app's opt-in progress UI.
 
+## Configuration file
+
+Which model and inference source each analysis step uses lives in one JSON
+file, `ml-service/config.json` (git-ignored; override the path with
+`AUTODOCS_CONFIG_FILE`). Copy `config.example.json` to start. The web app's
+Settings page edits the same file through `GET/PUT /config`; hand edits work
+too and are read when the next job starts. The file is written with owner-only
+permissions and API keys are never returned by the API.
+
+| Step | `steps.boundaries` (where events split) and `steps.annotate` (depth and summary of each event) |
+| --- | --- |
+| `backend` | `ollama`, `llamacpp`, `openai` (any OpenAI-compatible `/chat/completions` API, http or https) or `cloudtemple` |
+| `model`, `baseUrl`, `apiKey` | Model name, server URL, API key (chat backends) |
+| `timeoutSeconds`, `maxTokens` | Request timeout and output limit |
+| `numThread` | Ollama only |
+| `maxAttempts` | Chat backends: retries on 429/5xx |
+| `reasoningEffort` | `annotate` with Ollama: `low`, `medium` or `high` |
+| `summaryWordLimit` | `annotate`: words per summary |
+
+`processing` holds `remoteApiConcurrency`, `maxConcurrentJobs` (read at service
+start) and `inferenceLocation` (`auto`, `local`, `remote`).
+
+Resolution order for every value: config file, then the legacy environment
+variable (`LLM_BACKEND`, `MODEL0_NAME`, `MODEL1_NAME`, `OLLAMA_URL`,
+`LLAMACPP_BASE_URL`, `CLOUDTEMPLE_*`, `MAX_NEW_TOKENS`, `SUMMARY_WORD_LIMIT`,
+...), then the built-in default. Existing env-only setups keep working. A key
+from the environment (`OPENAI_API_KEY`, `CLOUDTEMPLE_API_KEY`) is used when the
+step has none; `OPENAI_API_KEY` is only ever sent to `api.openai.com`. A running
+job keeps the settings it started with. Chat backends (`openai`, `cloudtemple`)
+also use the shell-prompt rule to keep a prompt with its first command.
+
+`GET /config` returns `stored` (what the file says), `effective` (resolved
+values), `apiKeySet`/`apiKeyInFile`, and a `schema` with allowed values and
+limits. `PUT /config` merges a partial body: `null` resets a value to its
+default, omitting `apiKey` keeps the stored key, `""` removes it, invalid
+values return 422 and write nothing. The service has no login of its own;
+anyone who can reach it can read and change the configuration, so keep it on a
+private network (the web app requires a signed-in user for its settings API).
+
 ## Prerequisites
 
 - Python 3.11 or later.
@@ -113,5 +152,7 @@ LLM_BACKEND=llamacpp LLAMACPP_BASE_URL=http://127.0.0.1:8600 \
 requests, which shows whether parallelism works. `DUMMY_FAIL_EVERY=N` makes
 every Nth request fail with HTTP 500. `AUTODOCS_INFERENCE_LOCATION=remote` is
 needed because a loopback server otherwise counts as local inference.
-Sample recordings: `last-Iteration/data/model_0/raw/*.cast`. Run the tests with
-`pytest ml-service/tests`.
+Sample recordings: `last-Iteration/data/model_0/raw/*.cast`. Point a step at it with the settings page, or in `config.json`:
+`openai` with base URL `http://127.0.0.1:8600/v1` (it records the model name and
+Bearer key it receives in `/stats`), `llamacpp` with `http://127.0.0.1:8600`, or
+`ollama` with the same URL. Run the tests with `pytest ml-service/tests`.

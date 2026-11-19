@@ -6,6 +6,9 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- Per-step inference configuration: choose the inference source (Ollama, llama.cpp, OpenAI-compatible API, Cloud Temple), model, URL, API key, timeout, token limit and related settings separately for boundary detection and event summaries, in `ml-service/config.json` (see `config.example.json`). Environment variables keep working as defaults.
+- Settings page "Inference" section that reads and edits that file through new `GET/PUT /config` on `ml-service` and `GET/PUT /api/settings/inference` in the app. API keys are write-only.
+- Generic `openai` backend for any OpenAI-compatible chat API, over http or https.
 - Parallel model requests when inference uses a remote API: boundary detection sends up to N requests at once (default 8, setting "Parallel API requests" on the Settings page, 1 to 32; `AUTODOCS_REMOTE_API_CONCURRENCY` sets the service default). Local inference stays at one request at a time.
 - Event summaries start as soon as an event's end is known, while later boundaries are still being detected. The progress panel shows both stages running, with the event count marked `~` until it is final.
 - `ml-service/dev/dummy_inference.py`: a dummy inference server for running and testing the backend without models or API keys.
@@ -17,6 +20,8 @@ All notable changes to this project are documented here, following
 - Migration `autodocs-app/db/init/005_job_controls.sql` for the new `paused` and `cancelled` job states.
 
 ### Changed
+- Model code no longer reads environment variables at import; each job takes a snapshot of the configuration when it starts.
+- A user's own "Parallel API requests" is now optional; without it the configured service default applies (it used to always send 8).
 - The "Grouping terminal events" stage is gone; events are grouped while boundaries are found.
 - A failed model call now reports its real HTTP error instead of `ResponseNotRead` (llama.cpp streaming path).
 - `GET /api/terminal-session-jobs` returns `jobs` (a list) instead of a single `job`.
