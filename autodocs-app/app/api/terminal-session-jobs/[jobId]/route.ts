@@ -22,7 +22,22 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       await client.query('BEGIN');
       const locked = (await client.query<JobRow>(`SELECT id, title, duration_seconds, terminal_session_id FROM terminal_session_jobs WHERE id = $1 FOR UPDATE`, [jobId])).rows[0];
       if (!locked.terminal_session_id) {
-        const content = job.result.content.map((item) => { const parsed = JSON.parse(item) as { summary: string; depth: number }; return `${parsed.summary}\n${parsed.depth}`; }).join('\n');
+        const content = JSON.stringify({
+          version: 2,
+          events: job.result.content.map((item) => {
+            const parsed = JSON.parse(item) as {
+              summary: string;
+              depth: number;
+              xml?: string;
+            };
+
+            return {
+              label: parsed.summary,
+              depth: parsed.depth,
+              content: typeof parsed.xml === 'string' ? parsed.xml : null,
+            };
+          }),
+        });
         const session = (await client.query<{ id: string }>(`INSERT INTO terminal_sessions (title, duration_seconds, content) VALUES ($1, $2, $3) RETURNING id`, [locked.title, locked.duration_seconds, content])).rows[0];
         await client.query(`INSERT INTO terminal_session_access (user_id, terminal_session_id, owner) VALUES ($1, $2, TRUE)`, [user.id, session.id]);
         await client.query(`UPDATE terminal_session_jobs SET terminal_session_id = $2, updated_at = NOW() WHERE id = $1`, [jobId, session.id]);
