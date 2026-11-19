@@ -135,9 +135,15 @@ def test_stops_after_three_503_responses(monkeypatch):
     assert delays == [2.0, 4.0]
 
 
-def test_empty_reasoning_response_is_not_retried(monkeypatch):
+def test_empty_reasoning_response_retries_and_fails(monkeypatch):
     configure(monkeypatch)
     calls = []
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(cloudtemple.asyncio, "sleep", fake_sleep)
 
     def handler(request):
         calls.append(request)
@@ -172,7 +178,8 @@ def test_empty_reasoning_response_is_not_retried(monkeypatch):
     with pytest.raises(RuntimeError, match="no text content"):
         asyncio.run(execute())
 
-    assert len(calls) == 1
+    assert len(calls) == 3
+    assert delays == [2.0, 4.0]
 
 
 def test_retries_transient_connection_failure(monkeypatch):
@@ -204,3 +211,78 @@ def test_retries_transient_connection_failure(monkeypatch):
 
     assert asyncio.run(execute()) == "READY"
     assert len(calls) == 2
+
+
+def test_empty_response_then_success(monkeypatch):
+    configure(monkeypatch)
+    calls = []
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(cloudtemple.asyncio, "sleep", fake_sleep)
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {"content": ""},
+                    }]
+                },
+            )
+        return httpx.Response(200, json=SUCCESS)
+
+    async def execute():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            return await cloudtemple.chat_completion(
+                client,
+                model="test-model",
+                prompt="Synthetic test prompt",
+                max_tokens=128,
+                timeout_seconds=10,
+            )
+
+    assert asyncio.run(execute()) == "READY"
+    assert len(calls) == 2
+    assert delays == [2.0]
+
+
+def test_token_limit_error_is_not_retried(monkeypatch):
+    configure(monkeypatch)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {"content": ""},
+                }]
+            },
+        )
+
+    async def execute():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            await cloudtemple.chat_completion(
+                client,
+                model="test-model",
+                prompt="Synthetic test prompt",
+                max_tokens=128,
+                timeout_seconds=10,
+            )
+
+    with pytest.raises(RuntimeError, match="max_tokens"):
+        asyncio.run(execute())
+
+    assert len(calls) == 1

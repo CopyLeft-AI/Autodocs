@@ -43,13 +43,12 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
                 timeout=timeout_seconds,
             )
             response.raise_for_status()
-            break
 
         except httpx.HTTPStatusError as error:
-            retryable = error.response.status_code in (
-                429, 500, 502, 503, 504
-            )
-            if not retryable or attempt == max_attempts:
+            if (
+                error.response.status_code not in (429, 500, 502, 503, 504)
+                or attempt == max_attempts
+            ):
                 raise
 
             retry_after = error.response.headers.get("Retry-After")
@@ -58,8 +57,38 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
             if attempt == max_attempts:
                 raise
 
-        # 2 seconds after attempt 1, 4 seconds after attempt 2.
-        # The server-provided Retry-After takes precedence when numeric.
+        else:
+            data = response.json()
+            choices = data.get("choices") if isinstance(data, dict) else None
+
+            if not isinstance(choices, list) or not choices:
+                raise RuntimeError("Cloud Temple returned no completion choices")
+
+            choice = choices[0]
+            if not isinstance(choice, dict):
+                raise RuntimeError("Cloud Temple returned invalid choice data")
+
+            if choice.get("finish_reason") == "length":
+                raise RuntimeError("Cloud Temple response exceeded max_tokens")
+
+            message = choice.get("message")
+            content = (
+                message.get("content")
+                if isinstance(message, dict)
+                else None
+            )
+
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+
+            # HTTP 200 without usable text is a retriable failure.
+            # No response body or secret is included in the error.
+            if attempt == max_attempts:
+                raise RuntimeError(
+                    "Cloud Temple returned no text content "
+                    f"after {max_attempts} attempts"
+                )
+
         delay = min(30.0, 2.0 ** attempt)
 
         if retry_after is not None:
@@ -72,23 +101,4 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
 
         await asyncio.sleep(delay)
 
-    # Successful HTTP responses with missing or truncated content are
-    # validated below, not retried: repeating reasoning-only responses
-    # would consume additional tokens without fixing the underlying issue.
-
-    data = response.json()
-    choices = data.get("choices") if isinstance(data, dict) else None
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("Cloud Temple returned no completion choices")
-
-    choice = choices[0]
-    if choice.get("finish_reason") == "length":
-        raise RuntimeError("Cloud Temple response exceeded max_tokens")
-
-    message = choice.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("Cloud Temple returned no text content")
-
-    return content.strip()
+    raise RuntimeError("Cloud Temple exhausted retry attempts")
