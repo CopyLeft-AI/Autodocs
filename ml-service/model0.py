@@ -14,6 +14,9 @@ from typing import Awaitable, Callable, List, Optional
 
 import httpx
 
+from cloudtemple import chat_completion
+from xml.etree import ElementTree as ET
+
 SYSTEM_PROMPT = """Your task is to analyze terminal XML logs and determine whether the timestamp in the TARGET LINE belongs to a "new event" or an "old event".
 
 ### DEFINITION OF A NEW EVENT:
@@ -156,6 +159,25 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
     <|im_start|>/<|im_sep|>/<|im_end|> tokens from training are sent as-is,
     bypassing Ollama's own chat templating.
     """
+    if LLM_BACKEND == "cloudtemple":
+        prefix = "<|im_start|>user<|im_sep|>"
+        suffix = "<|im_end|><|im_start|>assistant<|im_sep|>"
+
+        if not prompt.startswith(prefix) or not prompt.endswith(suffix):
+            raise ValueError("Unexpected model0 prompt format")
+
+        user_prompt = prompt[len(prefix):-len(suffix)]
+        result = await chat_completion(
+            client,
+            model=MODEL0_NAME,
+            prompt=user_prompt,
+            max_tokens=256,
+            timeout_seconds=float(
+                os.getenv("CLOUDTEMPLE_MODEL0_TIMEOUT_SECONDS", "300")
+            ),
+        )
+        return result.lower()
+
     if LLM_BACKEND == "llamacpp":
         if not LLAMACPP_BASE_URL:
             raise ValueError("LLAMACPP_BASE_URL must be configured")
@@ -228,6 +250,28 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
 ProgressCallback = Callable[[int, int, int], Awaitable[None]]
 
 
+
+_SHELL_PROMPT_RE = re.compile(
+    r"(?:^|[\r\n])[\w.-]+@[\w.-]+(?::[^\r\n]*)?[#$]\s*$"
+)
+
+
+def _follows_shell_prompt(previous: Chunk, current: Chunk) -> bool:
+    """Recognize user input directly following a common shell prompt."""
+    if not previous.text.lstrip().startswith("<system_output"):
+        return False
+
+    if not current.text.lstrip().startswith("<user_input"):
+        return False
+
+    try:
+        element = ET.fromstring(previous.text)
+    except ET.ParseError:
+        return False
+
+    return bool(_SHELL_PROMPT_RE.search("".join(element.itertext())))
+
+
 async def find_new_event_timestamps(
     xml_content: str,
     client: httpx.AsyncClient,
@@ -236,12 +280,33 @@ async def find_new_event_timestamps(
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
 
-    for i in range(len(all_chunks)):
-        prompt = build_prompt(all_chunks, i)
-        model_result = await classify_chunk(client, prompt)
-        if is_new_event(model_result):
-            collected_new_events.append(all_chunks[i].ts)
+    seen_user_input = False
+
+    for i, chunk in enumerate(all_chunks):
+        if LLM_BACKEND == "cloudtemple" and i == 0:
+            # The first chunk already starts the first event.
+            pass
+        elif (
+            LLM_BACKEND == "cloudtemple"
+            and i > 0
+            and _follows_shell_prompt(all_chunks[i - 1], chunk)
+        ):
+            # Keep the initial prompt together with the first command.
+            # Subsequent commands start separate events.
+            if seen_user_input:
+                collected_new_events.append(chunk.ts)
+        else:
+            prompt = build_prompt(all_chunks, i)
+            model_result = await classify_chunk(client, prompt)
+            if is_new_event(model_result):
+                collected_new_events.append(chunk.ts)
+
+        if chunk.text.lstrip().startswith("<user_input"):
+            seen_user_input = True
+
         if progress_callback:
-            await progress_callback(i + 1, len(all_chunks), len(collected_new_events))
+            await progress_callback(
+                i + 1, len(all_chunks), len(collected_new_events)
+            )
 
     return collected_new_events

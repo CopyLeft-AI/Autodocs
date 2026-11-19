@@ -16,6 +16,8 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 from lxml import etree
 import httpx
 
+from cloudtemple import chat_completion
+
 SUMMARY_WORD_LIMIT = int(os.getenv("SUMMARY_WORD_LIMIT", "50"))
 LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").lower()
 LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "").rstrip("/")
@@ -282,6 +284,17 @@ def parse_depth_summary_pairs(text: str) -> List[Tuple[int, str]]:
 
 
 async def generate(client: httpx.AsyncClient, instruction: str) -> str:
+    if LLM_BACKEND == "cloudtemple":
+        return await chat_completion(
+            client,
+            model=MODEL1_NAME,
+            prompt=instruction,
+            max_tokens=MAX_NEW_TOKENS,
+            timeout_seconds=float(
+                os.getenv("CLOUDTEMPLE_MODEL1_TIMEOUT_SECONDS", "600")
+            ),
+        )
+
     if LLM_BACKEND == "llamacpp":
         if not LLAMACPP_BASE_URL:
             raise ValueError("LLAMACPP_BASE_URL must be configured")
