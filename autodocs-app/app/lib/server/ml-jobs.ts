@@ -54,6 +54,16 @@ export async function readMlJob(jobId: string): Promise<MlJobStatus> {
   return response.json() as Promise<MlJobStatus>;
 }
 
+export async function deleteMlJob(jobId: string): Promise<void> {
+  const response = await fetch(`${mlUrl()}/jobs/${encodeURIComponent(jobId)}`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`ML job deletion failed with status ${response.status}`);
+  }
+}
+
 export function createJobId(): string {
   return crypto.randomUUID();
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { IconAlertTriangle, IconCheck, IconCloudUpload, IconLoader2 } from '@tabler/icons-react';
+import { IconAlertTriangle, IconCheck, IconCloudUpload, IconLoader2, IconX } from '@tabler/icons-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UploadProgressPanel } from '@/app/components/UploadProgressPanel';
 import type { MlJobStatus } from '@/app/lib/server/ml-jobs';
@@ -24,6 +24,9 @@ interface UploadTileProperties {
 /** Uploads recordings through the configured legacy or local-CPU protocol. */
 export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
     const [isDragging, setIsDragging] = useState(false);
+    const [authenticationExpired, setAuthenticationExpired] = useState(false);
+    const isPollingReference = useRef(false);
+    const [isDeletingJob, setIsDeletingJob] = useState(false);
     const [uploadState, setUploadState] = useState<UploadState>('idle');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [job, setJob] = useState<MlJobStatus | null>(null);
@@ -33,7 +36,30 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
     const notifiedJobReference = useRef<string | null>(null);
 
     const pollJob = useCallback(async (jobId: string): Promise<void> => {
-        const response = await fetch(`/api/terminal-session-jobs/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+        const url = `/api/terminal-session-jobs/${encodeURIComponent(jobId)}`;
+        let response = await fetch(url, { cache: 'no-store' });
+
+        if (response.status === 401) {
+            const refreshResponse = await fetch('/api/auth/me', {
+                cache: 'no-store',
+                credentials: 'same-origin',
+            });
+
+            if (!refreshResponse.ok) {
+                setAuthenticationExpired(true);
+                throw new Error(
+                    'Your login expired. Sign in again to view progress. The analysis may still be running.',
+                );
+            }
+
+            response = await fetch(url, { cache: 'no-store' });
+
+            if (response.status === 401) {
+                setAuthenticationExpired(true);
+                throw new Error('Please sign in again to view analysis progress.');
+            }
+        }
+
         const body = await response.json().catch(() => ({}));
 
         if (!response.ok) {
@@ -75,7 +101,14 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
 
                 if (body.enabled && body.job) {
                     setJob(body.job);
-                    setUploadState('processing');
+                    if (body.job.status === 'failed') {
+                        setErrorMessage(body.job.error ?? 'Analysis failed.');
+                        setUploadState('error');
+                    } else if (body.job.status === 'completed') {
+                        setUploadState('success');
+                    } else {
+                        setUploadState('processing');
+                    }
                 }
             } catch {
                 // Legacy deployments do not require the job status endpoint.
@@ -93,19 +126,26 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
     }, []);
 
     useEffect(() => {
-        if (!job || ['completed', 'failed'].includes(job.status)) {
+        if (!job || authenticationExpired || ['completed', 'failed'].includes(job.status)) {
             return;
         }
 
         const timer = setInterval(() => {
-            void pollJob(job.id).catch((error: unknown) => {
-                setErrorMessage(error instanceof Error ? error.message : 'Unable to read upload progress.');
-                setUploadState('error');
-            });
+            if (isPollingReference.current) return;
+            isPollingReference.current = true;
+
+            void pollJob(job.id)
+                .catch((error: unknown) => {
+                    setErrorMessage(error instanceof Error ? error.message : 'Unable to read upload progress.');
+                    setUploadState('error');
+                })
+                .finally(() => {
+                    isPollingReference.current = false;
+                });
         }, 1000);
 
         return () => clearInterval(timer);
-    }, [job, pollJob]);
+    }, [job, pollJob, authenticationExpired]);
 
     const validateAndReadFile = async (file: File): Promise<{ title: string; durationSeconds: number; content: string }> => {
         if (file.name.split('.').pop()?.toLowerCase() !== 'cast') {
@@ -185,7 +225,43 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
         }
     };
 
-    const isBusy = !isProcessingModeResolved || ['registering', 'processing'].includes(uploadState);
+    const removeFailedJob = async (): Promise<void> => {
+        if (!job || job.status !== 'failed' || isDeletingJob) return;
+
+        if (!window.confirm('Delete this failed analysis and its uploaded recording?')) {
+            return;
+        }
+
+        setIsDeletingJob(true);
+
+        try {
+            const response = await fetch(
+                `/api/terminal-session-jobs/${encodeURIComponent(job.id)}`,
+                { method: 'DELETE' },
+            );
+
+            const body = await response.json().catch(() => ({})) as {
+                message?: string;
+            };
+
+            if (!response.ok) {
+                throw new Error(body.message ?? 'Could not delete failed analysis.');
+            }
+
+            setJob(null);
+            setErrorMessage(null);
+            setUploadState('idle');
+        } catch (error) {
+            setErrorMessage(
+                error instanceof Error ? error.message : 'Could not delete failed analysis.',
+            );
+            setUploadState('error');
+        } finally {
+            setIsDeletingJob(false);
+        }
+    };
+
+    const isBusy = !isProcessingModeResolved || authenticationExpired || ['registering', 'processing'].includes(uploadState);
     const isLocalJob = isLocalCpuJobsEnabled && uploadState === 'processing';
     const title = !isProcessingModeResolved
         ? 'Checking upload configuration…'
@@ -196,7 +272,7 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
             : uploadState === 'success'
                 ? 'Session saved'
                 : uploadState === 'error'
-                    ? 'Upload failed'
+                    ? authenticationExpired ? 'Sign in to resume progress' : 'Upload failed'
                     : 'Upload Session';
     const subtitle = !isProcessingModeResolved
         ? 'Preparing the configured upload workflow.'
@@ -258,6 +334,21 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
                     {!isBusy && uploadState !== 'success' && <span className="mt-4 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm">Choose .cast file</span>}
                 </div>
             </div>
+            {job?.status === 'failed' && (
+                <div className="flex justify-end">
+                    <button
+                        type="button"
+                        disabled={isDeletingJob}
+                        onClick={() => void removeFailedJob()}
+                        aria-label="Delete failed analysis"
+                        title="Delete failed analysis"
+                        className="inline-flex items-center gap-2 rounded-lg border border-destructive/40 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                    >
+                        <IconX size={18} />
+                        {isDeletingJob ? 'Deleting…' : 'Remove failed analysis'}
+                    </button>
+                </div>
+            )}
             {job && <UploadProgressPanel job={job} />}
         </div>
     );
