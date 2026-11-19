@@ -25,14 +25,17 @@ import model0
 import model1
 import parser0
 import restructure
+from job_metrics import estimate_remaining_seconds
 from job_runner import JobRunner
 from job_store import JobStore
+from resources import ResourceSampler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ml-service")
 
 job_store = JobStore(os.getenv("AUTODOCS_JOB_DIRECTORY", str(Path(__file__).with_name("jobs"))))
 job_runner = JobRunner(job_store)
+resource_sampler = ResourceSampler()
 
 
 @asynccontextmanager
@@ -61,6 +64,16 @@ class JobRequest(RecordingRequest):
     jobId: str
 
 
+async def with_live_fields(state: dict) -> dict:
+    """Add figures that are derived at read time and never persisted."""
+    live = state["status"] in ("running", "paused")
+    return {
+        **state,
+        "etaSeconds": estimate_remaining_seconds(state),
+        "resources": await resource_sampler.sample() if live else None,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -73,21 +86,46 @@ async def create_job(body: JobRequest):
     except OSError as error:
         raise HTTPException(status_code=500, detail=f"Could not persist upload job: {error}") from error
     await job_runner.enqueue(body.jobId)
-    return state
+    return await with_live_fields(state)
 
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     try:
-        return await job_store.status(job_id)
+        return await with_live_fields(await job_store.status(job_id))
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Upload job not found.") from error
 
 
-@app.delete("/jobs/{job_id}")
-async def delete_failed_job(job_id: UUID):
+async def control_job(job_id: UUID, action):
+    """Apply a pause/resume/cancel action, mapping store errors to HTTP codes."""
     try:
-        await job_store.delete_failed(str(job_id))
+        return await with_live_fields(await action(str(job_id)))
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Upload job not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/jobs/{job_id}/pause")
+async def pause_job(job_id: UUID):
+    return await control_job(job_id, job_runner.pause)
+
+
+@app.post("/jobs/{job_id}/resume")
+async def resume_job(job_id: UUID):
+    return await control_job(job_id, job_runner.resume)
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: UUID):
+    return await control_job(job_id, job_runner.cancel)
+
+
+@app.delete("/jobs/{job_id}")
+async def delete_inactive_job(job_id: UUID):
+    try:
+        await job_store.delete_inactive(str(job_id))
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Upload job not found.") from error
     except ValueError as error:

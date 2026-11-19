@@ -33,6 +33,10 @@ export AUTODOCS_JOB_DIRECTORY="$(pwd)/ml-service/jobs"
 ml-service/.venv/bin/uvicorn app:app --app-dir ml-service --host 127.0.0.1 --port 8500
 ```
 
+Optional: `AUTODOCS_MAX_CONCURRENT_JOBS` (default `2`) sets how many jobs run
+at the same time; further uploads wait in the queue. Lower it to `1` on a
+machine where parallel inference starves each job.
+
 The job directory stores raw uploaded recordings and status snapshots with
 owner-only permissions. Keep it on private storage and do not serve it over
 HTTP. Set `AUTODOCS_JOB_DIRECTORY` to a durable private location when running
@@ -57,3 +61,19 @@ for the full migration and behavior notes.
 app continues to call its original `/api/terminal-sessions` route, and this
 service's `POST /` endpoint remains compatible with that route. Only the
 `local-cpu-jobs` setting uses `POST /jobs` and `GET /jobs/{id}`.
+
+## Job endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /jobs` | Create and queue a job. |
+| `GET /jobs/{id}` | Status, stages, timeline, plus live `etaSeconds` and `resources`. |
+| `POST /jobs/{id}/pause` | Pause a running job after its current model call (409 otherwise). |
+| `POST /jobs/{id}/resume` | Resume a paused job. |
+| `POST /jobs/{id}/cancel` | Cancel a queued, running or paused job. |
+| `DELETE /jobs/{id}` | Delete a failed or cancelled job and its recording. |
+
+Job statuses: `queued`, `running`, `paused`, `completed`, `failed`, `cancelled`.
+`resources` reports machine-wide CPU (and GPU via `nvidia-smi`) load and is
+`null` when the LLM backend is remote (`LLM_BACKEND=cloudtemple` or a
+non-loopback Ollama URL).
