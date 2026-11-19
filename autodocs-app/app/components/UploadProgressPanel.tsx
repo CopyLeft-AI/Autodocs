@@ -1,7 +1,7 @@
 "use client";
 
 import {
-    IconAlertTriangle, IconBan, IconCheck, IconCircleDashed, IconClock, IconCpu, IconListDetails,
+    IconAlertTriangle, IconBan, IconCheck, IconCircleDashed, IconActivity, IconClock, IconListDetails,
     IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconTimelineEvent, IconTrash, IconX,
 } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
@@ -20,7 +20,7 @@ function headline(job: MlJobStatus): string {
         case 'completed': return 'Analysis complete';
         case 'paused': return 'Analysis paused';
         case 'queued': return 'Analysis queued';
-        default: return 'CPU analysis in progress';
+        default: return 'Analysis in progress';
     }
 }
 
@@ -83,7 +83,7 @@ export function UploadProgressPanel({ job, isBusy, onControl, onDelete, onDismis
         : cancelled ? <IconBan size={22} />
             : complete ? <IconCheck size={22} />
                 : paused ? <IconPlayerPause size={22} />
-                    : <IconCpu size={22} className="animate-pulse" />;
+                    : <IconActivity size={22} className="animate-pulse" />;
 
     return (
         <section className={`rounded-xl border p-4 ${border}`} aria-live="polite" aria-label={`${headline(job)}: ${job.title}`}>

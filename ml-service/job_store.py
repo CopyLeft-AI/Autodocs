@@ -64,7 +64,7 @@ class JobStore:
             os.chmod(temporary_path, 0o600)
             temporary_path.replace(input_path)
             now = self._now()
-            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for the CPU inference worker."}], "error": None, "result": None}
+            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for an inference worker."}], "error": None, "result": None}
             self._write_json(self._state_path(job_id), state)
             return state
 
@@ -83,7 +83,7 @@ class JobStore:
             if state["status"] != "queued":
                 return False
             state.update(status="running", startedAt=self._now())
-            self._append_event(state, "started", "CPU inference worker started.")
+            self._append_event(state, "started", "Inference worker started.")
             self._touch(state)
             self._write_json(self._state_path(job_id), state)
             return True

@@ -9,7 +9,7 @@ interface JobBody { title?: string; durationSeconds?: number; content?: string; 
 export async function POST(request: NextRequest) {
   const user = await getRequestUser(request);
   if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ message: 'Local CPU job processing is disabled. Use the legacy terminal-session endpoint.' }, { status: 409 });
+  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ message: 'Analysis job processing is disabled. Use the legacy terminal-session endpoint.' }, { status: 409 });
   try {
     const body = (await request.json()) as JobBody;
     const title = body.title?.trim();

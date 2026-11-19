@@ -24,7 +24,7 @@ export interface ResourceReading {
 /** Turns raw usage figures into labelled readings for the progress panel. */
 export function describeResources(resources: MlJobResources): ResourceReading[] {
     const readings: ResourceReading[] = [{
-        label: 'CPU',
+        label: 'Cores',
         percent: resources.cpu.percent,
         detail: `${resources.cpu.busyCores} of ${resources.cpu.cores} cores`,
     }];
