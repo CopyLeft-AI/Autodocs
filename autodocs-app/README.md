@@ -66,6 +66,28 @@ docker exec -it autodocs-postgres psql -U autodocs -d autodocs -c "\d terminal_s
 docker exec -it autodocs-postgres psql -U autodocs -d autodocs -c "\d terminal_session_access"
 ```
 
+## User rights
+
+Each user is either a user or an administrator, and users have a separate
+"can edit settings" right (new accounts: off). Administrators can do everything.
+`wolf.arthur@gmail.com` and `julia.longtin@gmail.com` are always administrators
+(list in `app/lib/server/permissions.ts`, compared case-insensitively). Other
+rights are stored in `users.role` and `users.can_edit_settings` and managed by
+administrators in Settings, "Users" tab (`GET /api/admin/users`,
+`PATCH /api/admin/users/<id>`).
+
+Groups (Settings, "Groups" tab; `GET/POST /api/admin/groups`,
+`PATCH/DELETE /api/admin/groups/<id>`) carry the same two rights. Each user has a
+"rights from" choice: `own` (the user's own role and settings right, the default)
+or `groups` (every right at least one of their groups has; their own columns are
+ignored). Deleting a group removes its rights from its members. Built-in
+administrators are not affected by groups. Editing the inference settings or your own
+parallel-request limit needs the settings right; everyone signed in can read
+them. Existing databases need `db/init/007_user_rights.sql` and `008_user_groups.sql`.
+
+Signup does not verify email addresses, so register the built-in administrator
+accounts before exposing the app, or anyone can claim those addresses.
+
 ## Local CPU inference option
 
 The original `ML_URL` behavior remains the default: uploads call the legacy

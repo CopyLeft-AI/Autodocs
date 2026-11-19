@@ -5,6 +5,7 @@ is needed:
 
   llama.cpp   POST /completions, POST /chat/completions (streamed)
   Ollama      POST /api/generate, POST /api/chat
+  OpenAI      POST /v1/chat/completions (not streamed; Bearer key is recorded, not checked)
 
 Answers are deterministic and cheap: model 0 says "new" when a command starts
 (a user_input directly after system_output), model 1 returns a short canned
@@ -34,7 +35,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 app = FastAPI(title="autodocs-dummy-inference")
-stats = {"requests": 0, "inFlight": 0, "maxInFlight": 0, "model0": 0, "model1": 0}
+stats = {"requests": 0, "inFlight": 0, "maxInFlight": 0, "model0": 0, "model1": 0, "models": {}, "lastAuthorization": None}
 
 
 def latency_seconds() -> float:
@@ -84,8 +85,7 @@ async def get_stats():
 
 @app.post("/stats/reset")
 async def reset_stats():
-    for key in stats:
-        stats[key] = 0
+    stats.update(requests=0, inFlight=0, maxInFlight=0, model0=0, model1=0, models={}, lastAuthorization=None)
     return stats
 
 
@@ -93,6 +93,7 @@ async def reset_stats():
 async def llamacpp_completions(request: Request):
     body = await request.json()
     async with tracked("model0"):
+        stats["models"][body["model"]] = stats["models"].get(body["model"], 0) + 1
         return {"choices": [{"text": model0_answer(body["prompt"])}]}
 
 
@@ -100,6 +101,7 @@ async def llamacpp_completions(request: Request):
 async def llamacpp_chat(request: Request):
     body = await request.json()
     async with tracked("model1"):
+        stats["models"][body["model"]] = stats["models"].get(body["model"], 0) + 1
         text = model1_answer(body["messages"][-1]["content"])
 
     def stream():
@@ -110,10 +112,24 @@ async def llamacpp_chat(request: Request):
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+@app.post("/v1/chat/completions")
+async def openai_chat(request: Request):
+    """OpenAI wire format; tells the two steps apart by their prompts."""
+    body = await request.json()
+    prompt = body["messages"][-1]["content"]
+    stats["lastAuthorization"] = request.headers.get("authorization")
+    is_summary = "<task>" in prompt and "<target id=" in prompt
+    async with tracked("model1" if is_summary else "model0"):
+        stats["models"][body["model"]] = stats["models"].get(body["model"], 0) + 1
+        text = model1_answer(prompt) if is_summary else model0_answer(prompt)
+    return {"choices": [{"finish_reason": "stop", "message": {"content": text}}]}
+
+
 @app.post("/api/generate")
 async def ollama_generate(request: Request):
     body = await request.json()
     async with tracked("model0"):
+        stats["models"][body["model"]] = stats["models"].get(body["model"], 0) + 1
         return {"response": model0_answer(body["prompt"])}
 
 
@@ -121,6 +137,7 @@ async def ollama_generate(request: Request):
 async def ollama_chat(request: Request):
     body = await request.json()
     async with tracked("model1"):
+        stats["models"][body["model"]] = stats["models"].get(body["model"], 0) + 1
         text = model1_answer(body["messages"][-1]["content"])
         thinking, _, content = text.partition("</think>")
         return {"message": {"thinking": thinking.removeprefix("<think>"), "content": content.strip()}}

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "processing": {
+    "remoteApiConcurrency": 8,
+    "maxConcurrentJobs": 2,
+    "inferenceLocation": "auto"
+  },
+  "steps": {
+    "boundaries": {
+      "backend": "llamacpp",
+      "model": "model0",
+      "baseUrl": "http://127.0.0.1:8080",
+      "timeoutSeconds": 3600,
+      "maxTokens": 32
+    },
+    "annotate": {
+      "backend": "openai",
+      "model": "gpt-4o-mini",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "sk-...",
+      "timeoutSeconds": 600,
+      "maxTokens": 2000,
+      "maxAttempts": 3,
+      "summaryWordLimit": 50
+    }
+  }
+}

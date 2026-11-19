@@ -21,6 +21,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+import config as service_config
 import model0
 import model1
 import parser0
@@ -75,6 +76,26 @@ async def with_live_fields(state: dict) -> dict:
         "etaSeconds": estimate_remaining_seconds(state),
         "resources": await resource_sampler.sample() if live else None,
     }
+
+
+@app.get("/config")
+async def get_config():
+    """Current settings (stored and effective values; API keys are never returned)."""
+    try:
+        return service_config.public_view(service_config.read_file_config())
+    except service_config.ConfigError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.put("/config")
+async def update_config(body: dict):
+    """Merge the given settings into the config file. Applies to jobs started afterwards."""
+    try:
+        return service_config.public_view(service_config.update_file_config(body))
+    except service_config.ConfigError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Could not write the config file: {error}") from error
 
 
 @app.get("/health")

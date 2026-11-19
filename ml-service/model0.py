@@ -8,7 +8,6 @@ constants are copied verbatim from the notebook -- do not "clean up" the
 formatting, it must match what the LoRA was trained/evaluated against.
 """
 import asyncio
-import os
 import re
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple
@@ -17,6 +16,7 @@ import httpx
 
 from cloudtemple import chat_completion
 from concurrency import effective_concurrency
+from config import StepConfig, load_config
 from xml.etree import ElementTree as ET
 
 SYSTEM_PROMPT = """Your task is to analyze terminal XML logs and determine whether the timestamp in the TARGET LINE belongs to a "new event" or an "old event".
@@ -36,15 +36,6 @@ CHUNK_RE = re.compile(r"<(user_input|system_output)\b[^>]*?(?:/>|>.*?</\1>)", fl
 TIME_RE = re.compile(r'timestamp="([\d\.]+)"')
 
 WINDOW_SIZE = 15
-LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").lower()
-LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "").rstrip("/")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-MODEL0_NAME = os.getenv("MODEL0_NAME", "model0")
-# Ollama's default n_threads is 1 unless told otherwise -- verified via
-# `journalctl -u ollama` showing "n_threads = 1 ... / 32" on this VM's 32
-# vCPUs, which made a single classify_chunk() call take minutes instead of
-# seconds. Must be passed per-request; there is no global env var for it.
-NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", str(os.cpu_count() or 1)))
 
 
 @dataclass
@@ -154,14 +145,18 @@ def is_new_event(model_result: str) -> bool:
     return "new" in model_result.lower()
 
 
-async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
-    """Call the local model0 endpoint with the raw (untemplated) prompt.
+async def classify_chunk(client: httpx.AsyncClient, prompt: str, step: Optional[StepConfig] = None) -> str:
+    """Ask the configured boundary model whether the target chunk starts an event.
 
-    Uses Ollama's /api/generate with raw=True so the literal
+    `step` is the boundary step configuration (default: the current config).
+    Ollama and llama.cpp receive the raw (untemplated) prompt so the literal
     <|im_start|>/<|im_sep|>/<|im_end|> tokens from training are sent as-is,
-    bypassing Ollama's own chat templating.
+    bypassing their own chat templating. Chat backends (openai, cloudtemple)
+    receive the prompt as a user message.
     """
-    if LLM_BACKEND == "cloudtemple":
+    step = step or load_config().steps["boundaries"]
+
+    if step.is_chat:
         prefix = "<|im_start|>user<|im_sep|>"
         suffix = "<|im_end|><|im_start|>assistant<|im_sep|>"
 
@@ -171,34 +166,35 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
         user_prompt = prompt[len(prefix):-len(suffix)]
         result = await chat_completion(
             client,
-            model=MODEL0_NAME,
+            model=step.model,
             prompt=user_prompt,
-            max_tokens=256,
-            timeout_seconds=float(
-                os.getenv("CLOUDTEMPLE_MODEL0_TIMEOUT_SECONDS", "300")
-            ),
+            max_tokens=step.max_tokens,
+            timeout_seconds=step.timeout_seconds,
+            base_url=step.base_url,
+            api_key=step.api_key,
+            max_attempts=step.max_attempts,
         )
         return result.lower()
 
-    if LLM_BACKEND == "llamacpp":
-        if not LLAMACPP_BASE_URL:
-            raise ValueError("LLAMACPP_BASE_URL must be configured")
+    if step.backend == "llamacpp":
+        if not step.base_url:
+            raise ValueError("The boundaries step needs a base URL for llama.cpp")
 
         resp = await client.post(
-            f"{LLAMACPP_BASE_URL}/completions",
+            f"{step.base_url}/completions",
             json={
-                "model": MODEL0_NAME,
+                "model": step.model,
                 "prompt": prompt,
                 "stream": False,
                 "temperature": 0,
                 "top_k": 1,
                 "top_p": 1.0,
                 "repeat_penalty": 1.0,
-                "max_tokens": 32,
+                "max_tokens": step.max_tokens,
             },
             timeout=httpx.Timeout(
                 connect=30.0,
-                read=float(os.getenv("LLAMACPP_MODEL0_TIMEOUT_SECONDS", "3600")),
+                read=step.timeout_seconds,
                 write=120.0,
                 pool=30.0,
             ),
@@ -218,13 +214,13 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
             )
         )
 
-    if LLM_BACKEND != "ollama":
-        raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")
+    if step.backend != "ollama":
+        raise ValueError(f"Unsupported backend: {step.backend}")
 
     resp = await client.post(
-        f"{OLLAMA_URL}/api/generate",
+        f"{step.base_url}/api/generate",
         json={
-            "model": MODEL0_NAME,
+            "model": step.model,
             "prompt": prompt,
             "raw": True,
             "stream": False,
@@ -232,18 +228,18 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
                 # Greedy decoding to match the notebook's model.generate(...)
                 # call, which never passes do_sample=True -- HF defaults to
                 # greedy argmax there. Ollama's own defaults (temp=0.1,
-                # top_k=40, top_p=0.9) sample instead, which was verified
-                # (via journalctl) to be the live config and is a plausible
-                # cause of exact-string-copy failures on target timestamps.
+                # top_k=40, top_p=0.9) sample instead.
                 "temperature": 0,
                 "repeat_penalty": 1.0,
                 "top_k": 1,
                 "top_p": 1.0,
-                "num_predict": 32,
-                "num_thread": NUM_THREAD,
+                "num_predict": step.max_tokens,
+                # Ollama defaults to n_threads=1 unless told otherwise, which
+                # made one call take minutes; it must be passed per request.
+                "num_thread": step.num_thread,
             },
         },
-        timeout=300.0,
+        timeout=step.timeout_seconds,
     )
     resp.raise_for_status()
     return resp.json()["response"].strip().lower()
@@ -274,20 +270,20 @@ def _follows_shell_prompt(previous: Chunk, current: Chunk) -> bool:
     return bool(_SHELL_PROMPT_RE.search("".join(element.itertext())))
 
 
-def plan_decisions(chunks: List[Chunk]) -> List[Optional[bool]]:
+def plan_decisions(chunks: List[Chunk], step: StepConfig) -> List[Optional[bool]]:
     """Decide up front which chunks need no model call.
 
     Returns one entry per chunk: True/False when the decision is fixed by the
-    shell-prompt rule (cloudtemple backend only), None when the model must be
+    shell-prompt rule (chat backends only), None when the model must be
     asked. The rule depends only on the chunks, never on model answers, so it
     can be settled before any request is sent.
     """
     plan: List[Optional[bool]] = []
     seen_user_input = False
     for i, chunk in enumerate(chunks):
-        if LLM_BACKEND == "cloudtemple" and i == 0:
+        if step.is_chat and i == 0:
             plan.append(False)  # The first chunk already starts the first event.
-        elif LLM_BACKEND == "cloudtemple" and _follows_shell_prompt(chunks[i - 1], chunk):
+        elif step.is_chat and _follows_shell_prompt(chunks[i - 1], chunk):
             # Keep the initial prompt together with the first command.
             # Subsequent commands start separate events.
             plan.append(seen_user_input)
@@ -303,6 +299,7 @@ async def stream_boundary_decisions(
     client: httpx.AsyncClient,
     concurrency: int = 1,
     before_request: Optional[Callable[[], Awaitable[None]]] = None,
+    step: Optional[StepConfig] = None,
 ) -> AsyncIterator[Tuple[int, Chunk, bool]]:
     """Yield (index, chunk, is_new_event) in chunk order as decisions arrive.
 
@@ -312,7 +309,8 @@ async def stream_boundary_decisions(
     the caller start work on the first events before later chunks are decided.
     `before_request` is awaited before each model call (used for pause).
     """
-    plan = plan_decisions(chunks)
+    step = step or load_config().steps["boundaries"]
+    plan = plan_decisions(chunks, step)
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def decide(i: int) -> bool:
@@ -322,7 +320,7 @@ async def stream_boundary_decisions(
         async with semaphore:  # FIFO: earlier chunks are served first.
             if before_request:
                 await before_request()
-            return is_new_event(await classify_chunk(client, build_prompt(chunks, i)))
+            return is_new_event(await classify_chunk(client, build_prompt(chunks, i), step))
 
     tasks = [asyncio.create_task(decide(i)) for i in range(len(chunks))]
     try:
@@ -339,11 +337,14 @@ async def find_new_event_timestamps(
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
     concurrency: Optional[int] = None,
+    step: Optional[StepConfig] = None,
 ) -> List[str]:
+    config = load_config()
+    step = step or config.steps["boundaries"]
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
     async for i, chunk, is_new in stream_boundary_decisions(
-        all_chunks, client, effective_concurrency(concurrency)
+        all_chunks, client, effective_concurrency(concurrency, step, config), step=step
     ):
         if is_new:
             collected_new_events.append(chunk.ts)
