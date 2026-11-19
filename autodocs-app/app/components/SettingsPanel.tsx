@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Gauge, KeyRound } from 'lucide-react';
-import { UserRightsCard } from '@/app/components/UserRightsCard';
+import { RightsAdmin } from '@/app/components/RightsAdmin';
 import { usePermissions } from '@/app/lib/use-permissions';
 import { InferenceSettingsCard } from '@/app/components/InferenceSettingsCard';
 
@@ -140,7 +140,7 @@ function ProcessingSettingsCard({ canEdit }: { canEdit: boolean }) {
 
 export function SettingsPanel() {
   const permissions = usePermissions();
-  const [tab, setTab] = useState<'general' | 'users'>('general');
+  const [tab, setTab] = useState<'general' | 'users' | 'groups'>('general');
   const canEdit = permissions?.canEditSettings ?? false;
   const [isEditing, setIsEditing] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -210,20 +210,20 @@ export function SettingsPanel() {
 
       {permissions?.isAdmin && (
         <div className="mb-5 flex gap-2" role="tablist">
-          {(['general', 'users'] as const).map((id) => (
+          {(['general', 'users', 'groups'] as const).map((id) => (
             <button
               key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
               className={`rounded-lg border px-4 py-2 text-sm transition-colors ${tab === id ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
             >
-              {id === 'general' ? 'General' : 'Users'}
+              {id === 'general' ? 'General' : id === 'users' ? 'Users' : 'Groups'}
             </button>
           ))}
         </div>
       )}
 
-      {permissions?.isAdmin && tab === 'users' && <UserRightsCard />}
+      {permissions?.isAdmin && tab !== 'general' && <RightsAdmin key={tab} view={tab} />}
 
-      <div className="space-y-5" hidden={permissions?.isAdmin === true && tab === 'users'}>
+      <div className="space-y-5" hidden={permissions?.isAdmin === true && tab !== 'general'}>
         <InferenceSettingsCard canEdit={canEdit} />
 
         <ProcessingSettingsCard canEdit={canEdit} />
