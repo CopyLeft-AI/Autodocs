@@ -1,7 +1,8 @@
 import { X, Download, Share2, Trash2, GitBranch, CornerDownRight, LogOut, ChevronRight, Loader2, CheckCircle, AlertCircle, UserPlus, TriangleAlert } from 'lucide-react';
 import { useState, useMemo } from 'react';
-import type { Session, SessionEvent } from '@/app/home/page';
-import { parseSessionContent } from '@/app/home/page';
+import type { Session } from '@/app/home/page';
+import { parseSessionContent, type SessionEvent } from '@/app/lib/session-content';
+
 
 interface SessionDetailModalProps {
   isOpen: boolean;
