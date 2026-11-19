@@ -7,14 +7,16 @@ merged+quantized model0 GGUF. All prompt text, regexes, and truncation
 constants are copied verbatim from the notebook -- do not "clean up" the
 formatting, it must match what the LoRA was trained/evaluated against.
 """
+import asyncio
 import os
 import re
 from dataclasses import dataclass
-from typing import Awaitable, Callable, List, Optional
+from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple
 
 import httpx
 
 from cloudtemple import chat_completion
+from concurrency import effective_concurrency
 from xml.etree import ElementTree as ET
 
 SYSTEM_PROMPT = """Your task is to analyze terminal XML logs and determine whether the timestamp in the TARGET LINE belongs to a "new event" or an "old event".
@@ -272,41 +274,79 @@ def _follows_shell_prompt(previous: Chunk, current: Chunk) -> bool:
     return bool(_SHELL_PROMPT_RE.search("".join(element.itertext())))
 
 
+def plan_decisions(chunks: List[Chunk]) -> List[Optional[bool]]:
+    """Decide up front which chunks need no model call.
+
+    Returns one entry per chunk: True/False when the decision is fixed by the
+    shell-prompt rule (cloudtemple backend only), None when the model must be
+    asked. The rule depends only on the chunks, never on model answers, so it
+    can be settled before any request is sent.
+    """
+    plan: List[Optional[bool]] = []
+    seen_user_input = False
+    for i, chunk in enumerate(chunks):
+        if LLM_BACKEND == "cloudtemple" and i == 0:
+            plan.append(False)  # The first chunk already starts the first event.
+        elif LLM_BACKEND == "cloudtemple" and _follows_shell_prompt(chunks[i - 1], chunk):
+            # Keep the initial prompt together with the first command.
+            # Subsequent commands start separate events.
+            plan.append(seen_user_input)
+        else:
+            plan.append(None)
+        if chunk.text.lstrip().startswith("<user_input"):
+            seen_user_input = True
+    return plan
+
+
+async def stream_boundary_decisions(
+    chunks: List[Chunk],
+    client: httpx.AsyncClient,
+    concurrency: int = 1,
+    before_request: Optional[Callable[[], Awaitable[None]]] = None,
+) -> AsyncIterator[Tuple[int, Chunk, bool]]:
+    """Yield (index, chunk, is_new_event) in chunk order as decisions arrive.
+
+    Up to `concurrency` model calls are in flight at once. Every chunk is
+    classified independently from its own context window, so the calls can run
+    in parallel while results are still handed out strictly in order. This lets
+    the caller start work on the first events before later chunks are decided.
+    `before_request` is awaited before each model call (used for pause).
+    """
+    plan = plan_decisions(chunks)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def decide(i: int) -> bool:
+        fixed = plan[i]
+        if fixed is not None:
+            return fixed
+        async with semaphore:  # FIFO: earlier chunks are served first.
+            if before_request:
+                await before_request()
+            return is_new_event(await classify_chunk(client, build_prompt(chunks, i)))
+
+    tasks = [asyncio.create_task(decide(i)) for i in range(len(chunks))]
+    try:
+        for i, task in enumerate(tasks):
+            yield i, chunks[i], await task
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def find_new_event_timestamps(
     xml_content: str,
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
+    concurrency: Optional[int] = None,
 ) -> List[str]:
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
-
-    seen_user_input = False
-
-    for i, chunk in enumerate(all_chunks):
-        if LLM_BACKEND == "cloudtemple" and i == 0:
-            # The first chunk already starts the first event.
-            pass
-        elif (
-            LLM_BACKEND == "cloudtemple"
-            and i > 0
-            and _follows_shell_prompt(all_chunks[i - 1], chunk)
-        ):
-            # Keep the initial prompt together with the first command.
-            # Subsequent commands start separate events.
-            if seen_user_input:
-                collected_new_events.append(chunk.ts)
-        else:
-            prompt = build_prompt(all_chunks, i)
-            model_result = await classify_chunk(client, prompt)
-            if is_new_event(model_result):
-                collected_new_events.append(chunk.ts)
-
-        if chunk.text.lstrip().startswith("<user_input"):
-            seen_user_input = True
-
+    async for i, chunk, is_new in stream_boundary_decisions(
+        all_chunks, client, effective_concurrency(concurrency)
+    ):
+        if is_new:
+            collected_new_events.append(chunk.ts)
         if progress_callback:
-            await progress_callback(
-                i + 1, len(all_chunks), len(collected_new_events)
-            )
-
+            await progress_callback(i + 1, len(all_chunks), len(collected_new_events))
     return collected_new_events

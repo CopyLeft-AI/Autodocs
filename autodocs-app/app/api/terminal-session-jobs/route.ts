@@ -3,6 +3,7 @@ import { db } from '@/app/lib/server/db';
 import { createJobId, enqueueMlJob, MlJobNotFoundError, readMlJob, type MlJobStatus } from '@/app/lib/server/ml-jobs';
 import { isLocalCpuJobsEnabled } from '@/app/lib/server/processing-mode';
 import { getRequestUser } from '@/app/lib/server/request-auth';
+import { readRemoteApiConcurrency } from '@/app/lib/server/user-settings';
 
 interface JobBody { title?: string; durationSeconds?: number; content?: string; }
 
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
     const jobId = createJobId();
     await db.query(`INSERT INTO terminal_session_jobs (id, user_id, title, duration_seconds, status) VALUES ($1, $2, $3, $4, 'queued')`, [jobId, user.id, title, body.durationSeconds]);
     try {
-      const job = await enqueueMlJob({ id: jobId, title, content });
+      const job = await enqueueMlJob({ id: jobId, title, content, parallelRequests: await readRemoteApiConcurrency(user.id) });
       return NextResponse.json({ job }, { status: 202 });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not start analysis.';

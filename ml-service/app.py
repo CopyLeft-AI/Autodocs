@@ -19,12 +19,13 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import model0
 import model1
 import parser0
 import restructure
+from concurrency import MAX_PARALLEL_REQUESTS
 from job_metrics import estimate_remaining_seconds
 from job_runner import JobRunner
 from job_store import JobStore
@@ -62,6 +63,8 @@ class RecordingResponse(BaseModel):
 
 class JobRequest(RecordingRequest):
     jobId: str
+    # Parallel model requests for a remote API; ignored for local inference.
+    parallelRequests: int | None = Field(default=None, ge=1, le=MAX_PARALLEL_REQUESTS)
 
 
 async def with_live_fields(state: dict) -> dict:
@@ -82,7 +85,7 @@ async def health():
 @app.post("/jobs")
 async def create_job(body: JobRequest):
     try:
-        state = await job_store.create(body.jobId, body.title, body.content)
+        state = await job_store.create(body.jobId, body.title, body.content, body.parallelRequests)
     except OSError as error:
         raise HTTPException(status_code=500, detail=f"Could not persist upload job: {error}") from error
     await job_runner.enqueue(body.jobId)

@@ -77,7 +77,7 @@ To opt into local CPU inference with durable, observable uploads:
 1. Install and start [`../ml-service`](../ml-service/README.md) on the same
    host or a private network endpoint. It requires Ollama with a Model 0 GGUF
    registered as `model0` and `gpt-oss:20b` (both names are configurable).
-2. Apply `db/init/004_processing_jobs.sql` and then `db/init/005_job_controls.sql`
+2. Apply `db/init/004_processing_jobs.sql` and then `db/init/005_job_controls.sql` and `db/init/006_user_settings.sql`
    (adds the `paused` and `cancelled` job states) to an existing Postgres
    database. On a new Docker volume they are applied automatically with the
    other init scripts; do not reset an existing volume merely to apply these
