@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRequestUser } from '@/app/lib/server/request-auth';
+import { authorize } from '@/app/lib/server/permissions';
 import {
   clearRemoteApiConcurrency,
   MAX_REMOTE_API_CONCURRENCY,
@@ -15,8 +15,9 @@ function limits() {
 }
 
 export async function GET(request: NextRequest) {
-  const user = await getRequestUser(request);
-  if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  const auth = await authorize(request, 'signedIn');
+  if (auth instanceof NextResponse) return auth;
+  const user = auth.user;
   try {
     return NextResponse.json({ remoteApiConcurrency: await readRemoteApiConcurrency(user.id), limits: limits() });
   } catch (error) {
@@ -26,8 +27,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const user = await getRequestUser(request);
-  if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  const auth = await authorize(request, 'editSettings');
+  if (auth instanceof NextResponse) return auth;
+  const user = auth.user;
   try {
     const body = (await request.json()) as ProcessingSettingsBody;
     const value = body.remoteApiConcurrency;

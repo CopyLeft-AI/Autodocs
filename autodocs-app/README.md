@@ -66,6 +66,21 @@ docker exec -it autodocs-postgres psql -U autodocs -d autodocs -c "\d terminal_s
 docker exec -it autodocs-postgres psql -U autodocs -d autodocs -c "\d terminal_session_access"
 ```
 
+## User rights
+
+Each user is either a user or an administrator, and users have a separate
+"can edit settings" right (new accounts: off). Administrators can do everything.
+`wolf.arthur@gmail.com` and `julia.longtin@gmail.com` are always administrators
+(list in `app/lib/server/permissions.ts`, compared case-insensitively). Other
+rights are stored in `users.role` and `users.can_edit_settings` and managed by
+administrators in Settings, "Users" tab (`GET /api/admin/users`,
+`PATCH /api/admin/users/<id>`). Editing the inference settings or your own
+parallel-request limit needs the settings right; everyone signed in can read
+them. Existing databases need `db/init/007_user_rights.sql`.
+
+Signup does not verify email addresses, so register the built-in administrator
+accounts before exposing the app, or anyone can claim those addresses.
+
 ## Local CPU inference option
 
 The original `ML_URL` behavior remains the default: uploads call the legacy

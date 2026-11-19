@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Gauge, KeyRound } from 'lucide-react';
+import { UserRightsCard } from '@/app/components/UserRightsCard';
+import { usePermissions } from '@/app/lib/use-permissions';
 import { InferenceSettingsCard } from '@/app/components/InferenceSettingsCard';
 
 const MASKED_PASSWORD = '........';
@@ -27,7 +29,7 @@ interface ProcessingSettings {
 }
 
 /** Edits how many model requests one analysis may send in parallel to a remote API. */
-function ProcessingSettingsCard() {
+function ProcessingSettingsCard({ canEdit }: { canEdit: boolean }) {
   const [saved, setSaved] = useState<ProcessingSettings | null>(null);
   const [draft, setDraft] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -113,14 +115,14 @@ function ProcessingSettingsCard() {
               step={1}
               value={draft}
               placeholder="default"
-              disabled={!saved || isSaving}
+              disabled={!saved || isSaving || !canEdit}
               onChange={(event) => setDraft(event.target.value)}
               className="w-24 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:opacity-60"
             />
             <button
               type="button"
               onClick={() => void handleSave()}
-              disabled={isSaving || !isValid || isUnchanged}
+              disabled={!canEdit || isSaving || !isValid || isUnchanged}
               className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? 'Saving...' : 'Save'}
@@ -137,6 +139,9 @@ function ProcessingSettingsCard() {
 }
 
 export function SettingsPanel() {
+  const permissions = usePermissions();
+  const [tab, setTab] = useState<'general' | 'users'>('general');
+  const canEdit = permissions?.canEditSettings ?? false;
   const [isEditing, setIsEditing] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -203,10 +208,25 @@ export function SettingsPanel() {
         </p>
       </div>
 
-      <div className="space-y-5">
-        <InferenceSettingsCard />
+      {permissions?.isAdmin && (
+        <div className="mb-5 flex gap-2" role="tablist">
+          {(['general', 'users'] as const).map((id) => (
+            <button
+              key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+              className={`rounded-lg border px-4 py-2 text-sm transition-colors ${tab === id ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
+            >
+              {id === 'general' ? 'General' : 'Users'}
+            </button>
+          ))}
+        </div>
+      )}
 
-        <ProcessingSettingsCard />
+      {permissions?.isAdmin && tab === 'users' && <UserRightsCard />}
+
+      <div className="space-y-5" hidden={permissions?.isAdmin === true && tab === 'users'}>
+        <InferenceSettingsCard canEdit={canEdit} />
+
+        <ProcessingSettingsCard canEdit={canEdit} />
 
         <div className="bg-card rounded-xl border border-border p-6 hover:bg-accent/10 transition-colors">
           <p className="mb-5 text-xs font-mono uppercase tracking-[0.24em] text-muted-foreground">

@@ -91,7 +91,8 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor: str
 const inputClass = 'w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:opacity-60';
 
 /** See and edit which model and inference source each analysis step uses (stored in the service's config file). */
-export function InferenceSettingsCard() {
+export function InferenceSettingsCard({ canEdit }: { canEdit: boolean }) {
+  const readOnly = !canEdit;
   const [config, setConfig] = useState<MlConfig | null>(null);
   const [steps, setSteps] = useState<Record<StepId, StepDraft> | null>(null);
   const [processing, setProcessing] = useState<ProcessingDraft | null>(null);
@@ -150,7 +151,7 @@ export function InferenceSettingsCard() {
   const numberInput = (id: string, value: string, onChange: (value: string) => void, name: string, placeholder: string) => (
     <input
       id={id} type="number" inputMode="numeric" value={value} placeholder={placeholder}
-      min={limit(name, 'min')} max={limit(name, 'max')} disabled={isSaving}
+      min={limit(name, 'min')} max={limit(name, 'max')} disabled={isSaving || readOnly}
       onChange={(event) => onChange(event.target.value)} className={inputClass}
     />
   );
@@ -183,7 +184,7 @@ export function InferenceSettingsCard() {
                 const backend = draft.backend || view.effective.backend;
                 const isChat = config.schema.chatBackends.includes(backend);
                 return (
-                  <fieldset key={id} className="rounded-lg border border-border/70 p-4" disabled={isSaving}>
+                  <fieldset key={id} className="rounded-lg border border-border/70 p-4" disabled={isSaving || readOnly}>
                     <legend className="px-2 text-sm text-foreground">{STEP_TITLES[id].title}</legend>
                     <p className="mb-3 text-[11px] text-muted-foreground">{STEP_TITLES[id].help}</p>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -247,7 +248,7 @@ export function InferenceSettingsCard() {
                 );
               })}
 
-              <fieldset className="rounded-lg border border-border/70 p-4" disabled={isSaving}>
+              <fieldset className="rounded-lg border border-border/70 p-4" disabled={isSaving || readOnly}>
                 <legend className="px-2 text-sm text-foreground">Processing</legend>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="Parallel API requests" htmlFor="processing-remoteApiConcurrency" hint="Service default for remote APIs. Your own value below overrides it.">
@@ -265,14 +266,15 @@ export function InferenceSettingsCard() {
                 </div>
               </fieldset>
 
-              <div className="flex flex-wrap items-center gap-2">
+              {readOnly && <p className="text-sm text-muted-foreground">You can view these settings but not change them. Ask an administrator for the right to edit settings.</p>}
+              {!readOnly && <div className="flex flex-wrap items-center gap-2">
                 <button
-                  type="button" onClick={() => void handleSave()} disabled={isSaving}
+                  type="button" onClick={() => void handleSave()} disabled={isSaving || readOnly}
                   className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {isSaving ? 'Saving...' : 'Save inference settings'}
                 </button>
-              </div>
+              </div>}
             </>
           )}
 

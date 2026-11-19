@@ -6,6 +6,7 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- User rights: every account is a user or an administrator, and users can be allowed to edit settings. `wolf.arthur@gmail.com` and `julia.longtin@gmail.com` are built-in administrators (hardcoded in `autodocs-app/app/lib/server/permissions.ts`). Administrators get a "Users" tab in Settings to promote users and grant the settings right. Without the right, the Inference and Analysis settings are read-only and their update APIs return 403. Apply `autodocs-app/db/init/007_user_rights.sql` to existing databases.
 - Per-step inference configuration: choose the inference source (Ollama, llama.cpp, OpenAI-compatible API, Cloud Temple), model, URL, API key, timeout, token limit and related settings separately for boundary detection and event summaries, in `ml-service/config.json` (see `config.example.json`). Environment variables keep working as defaults.
 - Settings page "Inference" section that reads and edits that file through new `GET/PUT /config` on `ml-service` and `GET/PUT /api/settings/inference` in the app. API keys are write-only.
 - Generic `openai` backend for any OpenAI-compatible chat API, over http or https.

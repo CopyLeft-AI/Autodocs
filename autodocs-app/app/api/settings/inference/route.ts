@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRequestUser } from '@/app/lib/server/request-auth';
+import { authorize } from '@/app/lib/server/permissions';
 import { MlConfigRejectedError, readMlConfig, writeMlConfig } from '@/app/lib/server/ml-jobs';
 
 /** Which model and inference source each analysis step uses; stored in the ML service's config file. */
 export async function GET(request: NextRequest) {
-  const user = await getRequestUser(request);
-  if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  const auth = await authorize(request, 'signedIn');
+  if (auth instanceof NextResponse) return auth;
   try {
     return NextResponse.json(await readMlConfig());
   } catch (error) {
@@ -15,8 +15,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const user = await getRequestUser(request);
-  if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  const auth = await authorize(request, 'editSettings');
+  if (auth instanceof NextResponse) return auth;
   let changes: unknown;
   try {
     changes = await request.json();
