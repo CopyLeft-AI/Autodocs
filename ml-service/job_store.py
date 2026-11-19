@@ -11,8 +11,7 @@ from typing import Any
 STAGES = (
     ("parse", "Parsing terminal recording", 5),
     ("boundaries", "Detecting event boundaries", 45),
-    ("restructure", "Grouping terminal events", 5),
-    ("annotate", "Generating event summaries", 43),
+    ("annotate", "Generating event summaries", 48),
     ("finalize", "Finalizing session", 2),
 )
 
@@ -53,9 +52,9 @@ class JobStore:
 
     @staticmethod
     def _stages() -> list[dict[str, Any]]:
-        return [{"id": identifier, "label": label, "weight": weight, "status": "pending", "current": 0, "total": 0, "detail": ""} for identifier, label, weight in STAGES]
+        return [{"id": identifier, "label": label, "weight": weight, "status": "pending", "current": 0, "total": 0, "estimated": False, "detail": ""} for identifier, label, weight in STAGES]
 
-    async def create(self, job_id: str, title: str, content: str) -> dict[str, Any]:
+    async def create(self, job_id: str, title: str, content: str, concurrency: int | None = None) -> dict[str, Any]:
         """Persist source input first, then publish an observable queued job."""
         async with self._lock:
             input_path = self._input_path(job_id)
@@ -64,7 +63,7 @@ class JobStore:
             os.chmod(temporary_path, 0o600)
             temporary_path.replace(input_path)
             now = self._now()
-            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for an inference worker."}], "error": None, "result": None}
+            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "requestedConcurrency": concurrency, "parallelRequests": 1, "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for an inference worker."}], "error": None, "result": None}
             self._write_json(self._state_path(job_id), state)
             return state
 
@@ -142,16 +141,29 @@ class JobStore:
             self._touch(state)
             self._write_json(self._state_path(job_id), state)
 
-    async def progress(self, job_id: str, stage_id: str, current: int, total: int, detail: str) -> None:
+    async def set_parallel_requests(self, job_id: str, count: int) -> None:
+        """Record how many model requests this job runs at once."""
+        await self._mutate(job_id, parallelRequests=count)
+
+    async def progress(self, job_id: str, stage_id: str, current: int, total: int, detail: str, estimated: bool = False) -> None:
+        """Record stage progress. `estimated` marks a total that is still a guess.
+
+        Stages can overlap (event summaries start while boundaries are still
+        being detected), so the job percent sums every running stage and never
+        moves backwards when an estimated total is revised.
+        """
         async with self._lock:
             state = self._load(job_id)
             stage = next(stage for stage in state["stages"] if stage["id"] == stage_id)
             previous_current = stage["current"]
-            stage.update({"current": current, "total": total, "detail": detail})
-            completed_weight = sum(candidate["weight"] for candidate in state["stages"] if candidate["status"] == "completed")
-            if total:
-                completed_weight += stage["weight"] * min(current / total, 1)
-            state["percent"] = min(99, int(completed_weight))
+            stage.update({"current": current, "total": total, "estimated": estimated, "detail": detail})
+            weight = 0.0
+            for candidate in state["stages"]:
+                if candidate["status"] == "completed":
+                    weight += candidate["weight"]
+                elif candidate["status"] == "running" and candidate["total"]:
+                    weight += candidate["weight"] * min(candidate["current"] / candidate["total"], 1)
+            state["percent"] = max(state["percent"], min(99, int(weight)))
             milestone = total and (current == 1 or current == total or (current * 100 // total) // 10 > (previous_current * 100 // total) // 10)
             if milestone:
                 self._append_event(state, "progress", detail)
@@ -163,6 +175,7 @@ class JobStore:
             state = self._load(job_id)
             stage = next(stage for stage in state["stages"] if stage["id"] == stage_id)
             stage["status"] = "completed"
+            stage["estimated"] = False
             stage["current"] = stage["total"] or 1
             stage["total"] = stage["total"] or 1
             stage["detail"] = detail
