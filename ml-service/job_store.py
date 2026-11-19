@@ -17,6 +17,10 @@ STAGES = (
 )
 
 
+ACTIVE_STATUSES = ("queued", "running", "paused")
+REMOVABLE_STATUSES = ("failed", "cancelled")
+
+
 class JobStore:
     """Own job snapshots and raw inputs without exposing raw terminal data."""
 
@@ -60,7 +64,7 @@ class JobStore:
             os.chmod(temporary_path, 0o600)
             temporary_path.replace(input_path)
             now = self._now()
-            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for the CPU inference worker."}], "error": None, "result": None}
+            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for an inference worker."}], "error": None, "result": None}
             self._write_json(self._state_path(job_id), state)
             return state
 
@@ -72,8 +76,62 @@ class JobStore:
         async with self._lock:
             return self._input_path(job_id).read_text()
 
-    async def running(self, job_id: str) -> None:
-        await self._mutate(job_id, status="running", message="CPU inference worker started.", kind="started")
+    async def running(self, job_id: str) -> bool:
+        """Start a queued job; return False when it was cancelled while waiting."""
+        async with self._lock:
+            state = self._load(job_id)
+            if state["status"] != "queued":
+                return False
+            state.update(status="running", startedAt=self._now())
+            self._append_event(state, "started", "Inference worker started.")
+            self._touch(state)
+            self._write_json(self._state_path(job_id), state)
+            return True
+
+    async def pause(self, job_id: str) -> dict[str, Any]:
+        """Mark a running job paused; the runner halts at its next checkpoint."""
+        async with self._lock:
+            state = self._load(job_id)
+            if state["status"] != "running":
+                raise ValueError("Only running jobs can be paused.")
+            state.update(status="paused", pausedAt=self._now())
+            self._append_event(state, "paused", "Analysis paused; it will stop after the current step finishes.")
+            self._touch(state)
+            self._write_json(self._state_path(job_id), state)
+            return state
+
+    async def resume(self, job_id: str) -> dict[str, Any]:
+        """Return a paused job to running and bank the time spent paused."""
+        async with self._lock:
+            state = self._load(job_id)
+            if state["status"] != "paused":
+                raise ValueError("Only paused jobs can be resumed.")
+            self._bank_paused_time(state)
+            state["status"] = "running"
+            self._append_event(state, "resumed", "Analysis resumed.")
+            self._touch(state)
+            self._write_json(self._state_path(job_id), state)
+            return state
+
+    async def cancel(self, job_id: str) -> dict[str, Any]:
+        """Stop a queued, running or paused job; keeps the record until deleted."""
+        async with self._lock:
+            state = self._load(job_id)
+            if state["status"] not in ACTIVE_STATUSES:
+                raise ValueError("Only queued, running or paused jobs can be cancelled.")
+            self._bank_paused_time(state)
+            state["status"] = "cancelled"
+            self._append_event(state, "cancelled", "Analysis cancelled.")
+            self._touch(state)
+            self._write_json(self._state_path(job_id), state)
+            return state
+
+    def _bank_paused_time(self, state: dict[str, Any]) -> None:
+        if not state.get("pausedAt"):
+            return
+        paused_for = (datetime.now(timezone.utc) - datetime.fromisoformat(state["pausedAt"])).total_seconds()
+        state["pausedSeconds"] = state.get("pausedSeconds", 0.0) + max(0.0, paused_for)
+        state["pausedAt"] = None
 
     async def stage(self, job_id: str, stage_id: str, total: int, detail: str) -> None:
         async with self._lock:
@@ -113,17 +171,17 @@ class JobStore:
             self._write_json(self._state_path(job_id), state)
 
     async def completed(self, job_id: str, result: dict[str, Any]) -> None:
-        await self._mutate(job_id, status="completed", percent=100, result=result, message="Session analysis completed and is ready to save.", kind="completed")
+        await self._mutate(job_id, status="completed", percent=100, result=result, message="Session analysis completed and is ready to save.", kind="completed", unless_cancelled=True)
 
     async def failed(self, job_id: str, message: str) -> None:
-        await self._mutate(job_id, status="failed", error=message, message=message, kind="failed")
+        await self._mutate(job_id, status="failed", error=message, message=message, kind="failed", unless_cancelled=True)
 
-    async def delete_failed(self, job_id: str) -> None:
-        """Remove only a failed job and its uploaded recording."""
+    async def delete_inactive(self, job_id: str) -> None:
+        """Remove a failed or cancelled job and its uploaded recording."""
         async with self._lock:
             state = self._load(job_id)
-            if state["status"] != "failed":
-                raise ValueError("Only failed jobs may be deleted.")
+            if state["status"] not in REMOVABLE_STATUSES:
+                raise ValueError("Only failed or cancelled jobs may be deleted.")
             self._input_path(job_id).unlink(missing_ok=True)
             self._state_path(job_id).unlink()
 
@@ -134,7 +192,7 @@ class JobStore:
                 state = json.loads(path.read_text())
                 if state["status"] == "queued":
                     queued.append(state["id"])
-                elif state["status"] == "running":
+                elif state["status"] in ("running", "paused"):
                     state["status"] = "failed"
                     state["error"] = "The inference service restarted before this job finished. Upload again to retry."
                     self._append_event(state, "failed", state["error"])
@@ -147,6 +205,8 @@ class JobStore:
             state = self._load(job_id)
             message = changes.pop("message", None)
             kind = changes.pop("kind", "update")
+            if changes.pop("unless_cancelled", False) and state["status"] == "cancelled":
+                return
             state.update(changes)
             if message:
                 self._append_event(state, kind, message)

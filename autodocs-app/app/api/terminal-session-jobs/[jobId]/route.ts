@@ -9,7 +9,7 @@ interface JobRow { id: string; title: string; duration_seconds: number; terminal
 export async function GET(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const user = await getRequestUser(request);
   if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ message: 'Local CPU job processing is disabled.' }, { status: 409 });
+  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ message: 'Analysis job processing is disabled.' }, { status: 409 });
   const { jobId } = await params;
   const row = (await db.query<JobRow>(`SELECT id, title, duration_seconds, terminal_session_id FROM terminal_session_jobs WHERE id = $1 AND user_id = $2`, [jobId, user.id])).rows[0];
   if (!row) return NextResponse.json({ message: 'Upload job not found.' }, { status: 404 });
@@ -59,7 +59,7 @@ export async function DELETE(
   if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
 
   if (!isLocalCpuJobsEnabled()) {
-    return NextResponse.json({ message: 'Local CPU jobs are disabled.' }, { status: 409 });
+    return NextResponse.json({ message: 'Analysis jobs are disabled.' }, { status: 409 });
   }
 
   const { jobId } = await params;
@@ -85,18 +85,18 @@ export async function DELETE(
 
     try {
       const job = await readMlJob(jobId);
-      if (job.status !== 'failed') {
+      if (job.status !== 'failed' && job.status !== 'cancelled') {
         return NextResponse.json(
-          { message: 'Only failed jobs can be deleted.' },
+          { message: 'Only failed or cancelled jobs can be deleted. Cancel the analysis first.' },
           { status: 409 },
         );
       }
 
       await db.query(
         `UPDATE terminal_session_jobs
-         SET status = 'failed', error_message = $3, updated_at = NOW()
+         SET status = $4, error_message = $3, updated_at = NOW()
          WHERE id = $1 AND user_id = $2 AND terminal_session_id IS NULL`,
-        [jobId, user.id, job.error],
+        [jobId, user.id, job.error, job.status],
       );
     } catch (error) {
       if (error instanceof MlJobNotFoundError) {
@@ -106,7 +106,7 @@ export async function DELETE(
       }
     }
 
-    if (alreadyMissing && row.status !== 'failed') {
+    if (alreadyMissing && row.status !== 'failed' && row.status !== 'cancelled') {
       return NextResponse.json(
         { message: 'Cannot delete an unverified missing ML job.' },
         { status: 409 },

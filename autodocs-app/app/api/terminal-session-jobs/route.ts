@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/app/lib/server/db';
-import { createJobId, enqueueMlJob, readMlJob } from '@/app/lib/server/ml-jobs';
+import { createJobId, enqueueMlJob, MlJobNotFoundError, readMlJob, type MlJobStatus } from '@/app/lib/server/ml-jobs';
 import { isLocalCpuJobsEnabled } from '@/app/lib/server/processing-mode';
 import { getRequestUser } from '@/app/lib/server/request-auth';
 
@@ -9,7 +9,7 @@ interface JobBody { title?: string; durationSeconds?: number; content?: string; 
 export async function POST(request: NextRequest) {
   const user = await getRequestUser(request);
   if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ message: 'Local CPU job processing is disabled. Use the legacy terminal-session endpoint.' }, { status: 409 });
+  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ message: 'Analysis job processing is disabled. Use the legacy terminal-session endpoint.' }, { status: 409 });
   try {
     const body = (await request.json()) as JobBody;
     const title = body.title?.trim();
@@ -31,30 +31,40 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Upper bound on analyses returned at once; keeps the status poll cheap. */
+const MAX_LISTED_JOBS = 20;
+
+/** Lists every analysis the user still needs to see: active, stopped, or finished but unsaved. */
 export async function GET(request: NextRequest) {
   const user = await getRequestUser(request);
   if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ enabled: false, job: null });
+  if (!isLocalCpuJobsEnabled()) return NextResponse.json({ enabled: false, jobs: [] });
   const result = await db.query<{ id: string }>(`SELECT id FROM terminal_session_jobs WHERE user_id = $1
   AND (
-    status IN ('queued', 'running', 'failed')
+    status IN ('queued', 'running', 'paused', 'failed', 'cancelled')
     OR (status = 'completed' AND terminal_session_id IS NULL)
   )
-ORDER BY CASE
-  WHEN status IN ('queued', 'running') THEN 0
-  WHEN status = 'completed' THEN 1
-  ELSE 2
-END, created_at DESC LIMIT 1`, [user.id]);
-  if (!result.rows[0]) return NextResponse.json({ enabled: true, job: null });
+ORDER BY created_at DESC LIMIT $2`, [user.id, MAX_LISTED_JOBS]);
   try {
-    const job = await readMlJob(result.rows[0].id);
-    await db.query(
-      `UPDATE terminal_session_jobs SET status = $2, progress_percent = $3, error_message = $4, updated_at = NOW() WHERE id = $1 AND user_id = $5`,
-      [job.id, job.status, job.percent, job.error, user.id],
-    );
-    return NextResponse.json({ enabled: true, job });
+    const settled = await Promise.all(result.rows.map(async (row) => {
+      try {
+        return await readMlJob(row.id);
+      } catch (error) {
+        // A job the ML service no longer knows about cannot be shown or controlled.
+        if (error instanceof MlJobNotFoundError) return null;
+        throw error;
+      }
+    }));
+    const jobs = settled.filter((job): job is MlJobStatus => job !== null);
+    for (const job of jobs) {
+      await db.query(
+        `UPDATE terminal_session_jobs SET status = $2, progress_percent = $3, error_message = $4, updated_at = NOW() WHERE id = $1 AND user_id = $5`,
+        [job.id, job.status, job.percent, job.error, user.id],
+      );
+    }
+    return NextResponse.json({ enabled: true, jobs });
   } catch (error) {
-    console.error('Could not read current ML job:', error);
+    console.error('Could not read current ML jobs:', error);
     return NextResponse.json(
       { message: 'Could not read analysis status. Please retry.' },
       { status: 502 },

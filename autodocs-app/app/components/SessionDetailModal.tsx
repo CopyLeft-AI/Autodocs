@@ -205,7 +205,7 @@ function EventNode({ node, defaultOpen = true }: { node: TreeNode; defaultOpen?:
 
 type ShareState = 'idle' | 'loading' | 'success' | 'error';
 
-function SharePanel({ sessionId }: { sessionId: string }) {
+function SharePanel({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
   const [email, setEmail] = useState('');
   const [shareState, setShareState] = useState<ShareState>('idle');
   const [shareMessage, setShareMessage] = useState<string | null>(null);
@@ -247,10 +247,21 @@ function SharePanel({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="border-t border-border px-6 py-4 bg-muted/20 flex-shrink-0">
-      <p className="text-xs text-muted-foreground font-mono mb-3 flex items-center gap-1.5">
-        <UserPlus className="w-3.5 h-3.5" />
-        Share with a user by email
-      </p>
+      <div className="flex items-start justify-between mb-3">
+        <p className="text-xs text-muted-foreground font-mono flex items-center gap-1.5">
+          <UserPlus className="w-3.5 h-3.5" />
+          Share with a user by email
+        </p>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close share panel"
+          title="Close share panel"
+          className="-mt-1 -mr-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
       <div className="flex gap-2">
         <input
@@ -479,7 +490,7 @@ export function SessionDetailModal({ isOpen, onClose, session, onDeleteSession }
 
         {/* Share Panel — slides in above footer for owned sessions only */}
         {!isShared && showSharePanel && (
-          <SharePanel sessionId={session.id} />
+          <SharePanel sessionId={session.id} onClose={() => setShowSharePanel(false)} />
         )}
 
         {/* Footer Actions */}

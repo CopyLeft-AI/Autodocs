@@ -27,7 +27,7 @@ class JobStoreDeletionTests(unittest.IsolatedAsyncioTestCase):
         job_id = await self.create_job()
         await self.store.failed(job_id, "ReadTimeout")
 
-        await self.store.delete_failed(job_id)
+        await self.store.delete_inactive(job_id)
 
         self.assertFalse((self.root / f"{job_id}.json").exists())
         self.assertFalse((self.root / f"{job_id}.cast").exists())
@@ -36,7 +36,7 @@ class JobStoreDeletionTests(unittest.IsolatedAsyncioTestCase):
         job_id = await self.create_job()
 
         with self.assertRaises(ValueError):
-            await self.store.delete_failed(job_id)
+            await self.store.delete_inactive(job_id)
 
         self.assertTrue((self.root / f"{job_id}.json").exists())
         self.assertTrue((self.root / f"{job_id}.cast").exists())
@@ -46,7 +46,7 @@ class JobStoreDeletionTests(unittest.IsolatedAsyncioTestCase):
         await self.store.running(job_id)
 
         with self.assertRaises(ValueError):
-            await self.store.delete_failed(job_id)
+            await self.store.delete_inactive(job_id)
 
         self.assertEqual((await self.store.status(job_id))["status"], "running")
 
@@ -55,13 +55,13 @@ class JobStoreDeletionTests(unittest.IsolatedAsyncioTestCase):
         await self.store.completed(job_id, {"content": []})
 
         with self.assertRaises(ValueError):
-            await self.store.delete_failed(job_id)
+            await self.store.delete_inactive(job_id)
 
         self.assertEqual((await self.store.status(job_id))["status"], "completed")
 
     async def test_unknown_job_is_rejected(self):
         with self.assertRaises(KeyError):
-            await self.store.delete_failed(str(uuid4()))
+            await self.store.delete_inactive(str(uuid4()))
 
 
 if __name__ == "__main__":
