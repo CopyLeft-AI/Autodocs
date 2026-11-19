@@ -77,9 +77,11 @@ To opt into local CPU inference with durable, observable uploads:
 1. Install and start [`../ml-service`](../ml-service/README.md) on the same
    host or a private network endpoint. It requires Ollama with a Model 0 GGUF
    registered as `model0` and `gpt-oss:20b` (both names are configurable).
-2. Apply `db/init/004_processing_jobs.sql` to an existing Postgres database.
-   On a new Docker volume it is applied automatically with the other init
-   scripts; do not reset an existing volume merely to apply this migration.
+2. Apply `db/init/004_processing_jobs.sql` and then `db/init/005_job_controls.sql`
+   (adds the `paused` and `cancelled` job states) to an existing Postgres
+   database. On a new Docker volume they are applied automatically with the
+   other init scripts; do not reset an existing volume merely to apply these
+   migrations.
 3. Set the web app environment values:
 
    ```env
@@ -91,10 +93,24 @@ To opt into local CPU inference with durable, observable uploads:
    job ID, and the UI shows parsing, boundary detection, event grouping,
    annotation, and finalization progress with a timestamped event log.
 
-Only one local CPU job runs at a time so each inference can use the configured
-CPU threads without competing uploads starving it. Reloading the page resumes
-the active job display. If the ML service restarts while a job is running, that
-job is marked failed explicitly rather than reported as still running.
+Each upload becomes its own job, so you can start several analyses without
+waiting for the current one. The ML service runs up to
+`AUTODOCS_MAX_CONCURRENT_JOBS` jobs at once (default 2) and queues the rest.
+Every job panel offers:
+
+- **Pause / Resume**: the job stops after the model call in progress and keeps
+  its place. Time spent paused is not counted in the ETA.
+- **Cancel**: interrupts the job immediately. A cancelled or failed job can then
+  be deleted, which also removes its uploaded recording.
+- **ETA**: shown once at least 5% of the work and 30 seconds of running time
+  give enough data for a linear estimate.
+- **Local resource usage**: machine-wide CPU load (percent and busy cores) and,
+  when `nvidia-smi` is available, GPU load. Hidden when inference uses a remote
+  API such as Cloud Temple.
+
+Reloading the page resumes the display of every unfinished job. If the ML
+service restarts while a job is running or paused, that job is marked failed
+explicitly rather than reported as still running.
 
 ## Running Locally
 

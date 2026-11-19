@@ -85,18 +85,18 @@ export async function DELETE(
 
     try {
       const job = await readMlJob(jobId);
-      if (job.status !== 'failed') {
+      if (job.status !== 'failed' && job.status !== 'cancelled') {
         return NextResponse.json(
-          { message: 'Only failed jobs can be deleted.' },
+          { message: 'Only failed or cancelled jobs can be deleted. Cancel the analysis first.' },
           { status: 409 },
         );
       }
 
       await db.query(
         `UPDATE terminal_session_jobs
-         SET status = 'failed', error_message = $3, updated_at = NOW()
+         SET status = $4, error_message = $3, updated_at = NOW()
          WHERE id = $1 AND user_id = $2 AND terminal_session_id IS NULL`,
-        [jobId, user.id, job.error],
+        [jobId, user.id, job.error, job.status],
       );
     } catch (error) {
       if (error instanceof MlJobNotFoundError) {
@@ -106,7 +106,7 @@ export async function DELETE(
       }
     }
 
-    if (alreadyMissing && row.status !== 'failed') {
+    if (alreadyMissing && row.status !== 'failed' && row.status !== 'cancelled') {
       return NextResponse.json(
         { message: 'Cannot delete an unverified missing ML job.' },
         { status: 409 },
