@@ -15,13 +15,27 @@ export interface MlJobTimelineEvent {
   message: string;
 }
 
+export type MlJobState = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+/** Usage of the local processing resources; null when inference runs on a remote API. */
+export interface MlJobResources {
+  cpu: { percent: number; cores: number; busyCores: number };
+  gpu: { percent: number; count: number } | null;
+}
+
+export type MlJobControlAction = 'pause' | 'resume' | 'cancel';
+
 export interface MlJobStatus {
   id: string;
   title: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: MlJobState;
   percent: number;
   createdAt: string;
   updatedAt: string;
+  startedAt: string | null;
+  /** Estimated seconds left; null until enough work has finished to estimate. */
+  etaSeconds: number | null;
+  resources: MlJobResources | null;
   stages: MlJobStage[];
   timeline: MlJobTimelineEvent[];
   error: string | null;
@@ -45,11 +59,19 @@ export async function enqueueMlJob(input: { id: string; title: string; content: 
   return response.json() as Promise<MlJobStatus>;
 }
 
+export class MlJobNotFoundError extends Error {
+  constructor(jobId: string) {
+    super(`ML job not found: ${jobId}`);
+    this.name = 'MlJobNotFoundError';
+  }
+}
+
 export async function readMlJob(jobId: string): Promise<MlJobStatus> {
   const response = await fetch(`${mlUrl()}/jobs/${encodeURIComponent(jobId)}`, {
     cache: 'no-store',
     signal: AbortSignal.timeout(10_000),
   });
+  if (response.status === 404) throw new MlJobNotFoundError(jobId);
   if (!response.ok) throw new Error(`ML job status failed with status ${response.status}`);
   return response.json() as Promise<MlJobStatus>;
 }
@@ -59,9 +81,31 @@ export async function deleteMlJob(jobId: string): Promise<void> {
     method: 'DELETE',
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) {
+  if (!response.ok && response.status !== 404) {
     throw new Error(`ML job deletion failed with status ${response.status}`);
   }
+}
+
+export class MlJobConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MlJobConflictError';
+  }
+}
+
+/** Ask the ML service to pause, resume or cancel a job; returns its new state. */
+export async function controlMlJob(jobId: string, action: MlJobControlAction): Promise<MlJobStatus> {
+  const response = await fetch(`${mlUrl()}/jobs/${encodeURIComponent(jobId)}/${action}`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status === 404) throw new MlJobNotFoundError(jobId);
+  if (response.status === 409) {
+    const body = await response.json().catch(() => ({})) as { detail?: string };
+    throw new MlJobConflictError(body.detail ?? `Cannot ${action} this job in its current state.`);
+  }
+  if (!response.ok) throw new Error(`ML job ${action} failed with status ${response.status}`);
+  return response.json() as Promise<MlJobStatus>;
 }
 
 export function createJobId(): string {

@@ -203,22 +203,32 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-        if isinstance(data, dict) and "choices" not in data:
+        if isinstance(data, dict):
+            choices = data.get("choices")
+
+            if (
+                isinstance(choices, list)
+                and choices
+                and isinstance(choices[0], dict)
+                and isinstance(choices[0].get("text"), str)
+            ):
+                return choices[0]["text"].strip().lower()
+
             content = data.get("content")
-            if isinstance(content, str):
+            if "choices" not in data and isinstance(content, str):
                 return content.strip().lower()
-        if "choices" not in data:
-            if isinstance(data, dict):
-                details = (
-                    f"JSON keys={list(data)}; "
-                    f"error={repr(data.get('error'))[:500]}"
-                )
-            else:
-                details = f"JSON type={type(data).__name__}"
-            raise RuntimeError(
-                f"llama.cpp /v1/completions HTTP {resp.status_code}: {details}"
+
+            details = (
+                f"JSON keys={list(data)}; "
+                f"error={repr(data.get('error'))[:500]}"
             )
-        return data["choices"][0]["text"].strip().lower()
+        else:
+            details = f"JSON type={type(data).__name__}"
+
+        raise RuntimeError(
+            f"Unexpected llama.cpp /completions response "
+            f"(HTTP {resp.status_code}): {details}"
+        )
 
     if LLM_BACKEND != "ollama":
         raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")

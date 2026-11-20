@@ -1,5 +1,5 @@
-import { Clock, FileText, GitBranch, CornerDownRight, LogOut } from 'lucide-react';
-import { useMemo } from 'react';
+import { Clock, FileText, GitBranch, CornerDownRight, LogOut, Trash2, Loader2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import type { Session } from '@/app/home/page';
 import { parseSessionContent, type SessionEvent } from '@/app/lib/session-content';
 
@@ -7,6 +7,8 @@ import { parseSessionContent, type SessionEvent } from '@/app/lib/session-conten
 interface SessionTileProps {
   session: Session;
   onClick?: () => void;
+  /** When given, the tile shows a delete button (owned sessions only). */
+  onDelete?: (id: string) => Promise<void>;
 }
 
 function EventDepthBadge({ depth }: { depth: number }) {
@@ -34,8 +36,24 @@ function EventDepthBadge({ depth }: { depth: number }) {
   );
 }
 
-export function SessionTile({ session, onClick }: SessionTileProps) {
+type TileDeleteState = 'idle' | 'confirm' | 'deleting' | 'error';
+
+export function SessionTile({ session, onClick, onDelete }: SessionTileProps) {
   const { title, createdAt, duration, content } = session;
+  const [deleteState, setDeleteState] = useState<TileDeleteState>('idle');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const confirmDelete = async () => {
+    if (!onDelete) return;
+    setDeleteState('deleting');
+    setDeleteError(null);
+    try {
+      await onDelete(session.id);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Failed to delete session.');
+      setDeleteState('error');
+    }
+  };
 
   const events = useMemo(() => parseSessionContent(content), [content]);
 
@@ -57,11 +75,51 @@ export function SessionTile({ session, onClick }: SessionTileProps) {
         <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center group-hover:bg-primary/20 transition-colors">
           <FileText className="w-6 h-6 text-primary" />
         </div>
-        <div className="flex items-center gap-1 text-muted-foreground text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
           <Clock className="w-4 h-4" />
           <span>{duration}</span>
+          {onDelete && deleteState === 'idle' && (
+            <button
+              type="button"
+              aria-label={`Delete session ${title}`}
+              title="Delete session"
+              onClick={(event) => { event.stopPropagation(); setDeleteState('confirm'); }}
+              className="ml-1 p-1.5 rounded-md hover:text-destructive hover:bg-destructive/10 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
+
+      {onDelete && deleteState !== 'idle' && (
+        <div
+          className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <p className="text-foreground mb-2">Delete &ldquo;{title}&rdquo;? This cannot be undone.</p>
+          {deleteState === 'error' && <p className="text-destructive font-mono mb-2">{deleteError}</p>}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={deleteState === 'deleting'}
+              onClick={() => void confirmDelete()}
+              className="px-3 py-1.5 rounded-md bg-destructive text-white inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {deleteState === 'deleting' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              {deleteState === 'error' ? 'Retry' : 'Delete'}
+            </button>
+            <button
+              type="button"
+              disabled={deleteState === 'deleting'}
+              onClick={() => { setDeleteState('idle'); setDeleteError(null); }}
+              className="px-3 py-1.5 rounded-md border border-border disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Title & date */}
       <h3 className="text-foreground mb-1 line-clamp-1">{title}</h3>

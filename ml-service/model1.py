@@ -300,6 +300,7 @@ async def generate(client: httpx.AsyncClient, instruction: str) -> str:
             raise ValueError("LLAMACPP_BASE_URL must be configured")
 
         chunks: list[str] = []
+        truncated = False
 
         async with client.stream(
             "POST",
@@ -309,7 +310,7 @@ async def generate(client: httpx.AsyncClient, instruction: str) -> str:
                 "messages": [{"role": "user", "content": instruction}],
                 "stream": True,
                 "temperature": 0.0,
-                "max_tokens": min(MAX_NEW_TOKENS, 256),
+                "max_tokens": MAX_NEW_TOKENS,
                 "repeat_penalty": 1.2,
             },
             timeout=httpx.Timeout(
@@ -328,10 +329,16 @@ async def generate(client: httpx.AsyncClient, instruction: str) -> str:
                     continue
                 packet = json.loads(data)
                 for choice in packet.get("choices", []):
+                    if choice.get("finish_reason") == "length":
+                        truncated = True
                     content = choice.get("delta", {}).get("content")
                     if isinstance(content, str):
                         chunks.append(content)
 
+        if truncated:
+            raise RuntimeError(
+                "llama.cpp reached max_tokens before completing the response."
+            )
         return "".join(chunks)
 
     if LLM_BACKEND != "ollama":
@@ -375,6 +382,7 @@ async def annotate_events(
 
     for upto in range(len(events)):
         success = False
+        invalid_response_seen = False
         text = ""
         pkg: Dict = {}
 
@@ -383,14 +391,21 @@ async def annotate_events(
             instr = build_instruction(pkg)
             try:
                 text = await generate(client, instr)
-                success = True
-                break
+                if parse_depth_summary_pairs(text):
+                    success = True
+                    break
+                invalid_response_seen = True
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in (400, 413) or "context" in e.response.text.lower():
                     continue
                 raise
 
         if not success:
+            if invalid_response_seen:
+                raise RuntimeError(
+                    f"Model 1 returned no valid annotation JSON for event {upto} "
+                    "after all attempts."
+                )
             text = '{"annotation": "Event payload too large for context window.", "depth": 0}'
 
         pairs = parse_depth_summary_pairs(text)

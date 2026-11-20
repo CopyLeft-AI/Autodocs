@@ -167,7 +167,8 @@ export default function App() {
     setSelectedSession(null);
   };
 
-  const handleDeleteSession = async (sessionId: string) => {
+  /** Deletes an owned session; throws on failure so the caller can show the error. */
+  const deleteSession = async (sessionId: string) => {
     const res = await fetch(`/api/terminal-sessions/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
     });
@@ -178,6 +179,10 @@ export default function App() {
     }
 
     setSessions((current) => current.filter((session) => session.id !== sessionId));
+  };
+
+  const handleDeleteSession = async (sessionId: string) => {
+    await deleteSession(sessionId);
     handleCloseModal();
   };
 
@@ -214,6 +219,7 @@ export default function App() {
               key={session.id}
               session={session}
               onClick={() => handleSessionClick(session)}
+              onDelete={deleteSession}
             />
           ))}
         </div>

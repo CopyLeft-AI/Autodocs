@@ -14,6 +14,9 @@ def test_completed_job_preserves_event_xml():
     class Store:
         saved = None
 
+        async def status(self, job_id):
+            return {"status": "running"}
+
         async def running(self, *args): pass
         async def input_content(self, *args): return 'test recording'
         async def stage(self, *args): pass
