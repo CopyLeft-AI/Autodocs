@@ -130,14 +130,25 @@ class JobRunner:
                             )
                         continue
 
-                await self._run_supervised(job_id)
+                try:
+                    await self._run_supervised(job_id)
+                except KeyError:
+                    try:
+                        await self.store.status(job_id)
+                    except KeyError:
+                        logger.info("Job %s was deleted during processing", job_id)
+                    else:
+                        raise
             finally:
                 self.queue.task_done()
 
     async def _run_supervised(self, job_id: str) -> None:
         """Run one job as its own task so cancel() can interrupt it mid-request."""
-        if not await self.store.running(job_id):
-            return  # Cancelled while it waited in the queue.
+        try:
+            if not await self.store.running(job_id):
+                return  # Cancelled while it waited in the queue.
+        except KeyError:
+            return  # Job was deleted before processing could start.
         task = asyncio.create_task(self._run(job_id), name=f"autodocs-job-{job_id}")
         self.job_tasks[job_id] = task
         try:
@@ -145,8 +156,18 @@ class JobRunner:
         except asyncio.CancelledError:
             if not task.cancelled() or asyncio.current_task().cancelling():
                 raise  # The worker itself is shutting down, not a job cancel.
-        except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError):
-            state = await self.store.status(job_id)
+        except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError, httpx.HTTPStatusError) as error:
+            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code not in (429, 500, 502, 503, 504):
+                try:
+                    await self.store.failed(job_id, f"{type(error).__name__}: {error}")
+                except KeyError:
+                    logger.info("Job %s was deleted before its failure could be saved", job_id)
+                return
+            try:
+                state = await self.store.status(job_id)
+            except KeyError:
+                logger.info("Job %s was deleted before its network failure could be handled", job_id)
+                return
             retry_number = int(state.get("retryCount", 0)) + 1
 
             if retry_number <= self.max_network_retries:
@@ -170,7 +191,10 @@ class JobRunner:
                 )
         except Exception as error:
             logger.exception("job %s failed", job_id)
-            await self.store.failed(job_id, f"{type(error).__name__}: {error}")
+            try:
+                await self.store.failed(job_id, f"{type(error).__name__}: {error}")
+            except KeyError:
+                logger.info("Job %s was deleted before its failure could be saved", job_id)
         finally:
             self.job_tasks.pop(job_id, None)
             self.controls.pop(job_id, None)
