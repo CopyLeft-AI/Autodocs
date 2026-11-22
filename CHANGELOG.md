@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- Single sign-on: administrators enable and configure Google, Microsoft, GitHub, GitLab, Okta, Auth0, Keycloak, Amazon Cognito, LinkedIn, Discord and custom OpenID Connect providers (client ID, write-only encrypted client secret, provider fields, account policy) in a new administrator-only Settings "Single sign-on" tab. Enabled providers get buttons on the login and signup pages. See `autodocs-app/README.md`, "Single sign-on". Apply `autodocs-app/db/init/009_sso.sql` to existing databases; new optional variables `APP_BASE_URL`, `SSO_SECRET_KEY`, `SSO_ALLOW_INSECURE_HTTP`.
+- `npm test` (Bun) with unit tests for the single sign-on code, and the `jose` dependency.
 - User groups: administrators create groups in a new Settings "Groups" tab, give them rights (administrator, edit settings) and choose their members. Each user, in the "Users" tab, either keeps their own rights or inherits every right their groups have. Apply `autodocs-app/db/init/008_user_groups.sql` to existing databases (existing users keep their own rights).
 - User rights: every account is a user or an administrator, and users can be allowed to edit settings. `wolf.arthur@gmail.com` and `julia.longtin@gmail.com` are built-in administrators (hardcoded in `autodocs-app/app/lib/server/permissions.ts`). Administrators get a "Users" tab in Settings to promote users and grant the settings right. Without the right, the Inference and Analysis settings are read-only and their update APIs return 403. Apply `autodocs-app/db/init/007_user_rights.sql` to existing databases.
 - Per-step inference configuration: choose the inference source (Ollama, llama.cpp, OpenAI-compatible API, Cloud Temple), model, URL, API key, timeout, token limit and related settings separately for boundary detection and event summaries, in `ml-service/config.json` (see `config.example.json`). Environment variables keep working as defaults.
@@ -22,6 +24,7 @@ All notable changes to this project are documented here, following
 - Migration `autodocs-app/db/init/005_job_controls.sql` for the new `paused` and `cancelled` job states.
 
 ### Changed
+- Accounts may now have no password (people created by single sign-on). Password login, password change and email change refuse them with a clear message.
 - Model code no longer reads environment variables at import; each job takes a snapshot of the configuration when it starts.
 - A user's own "Parallel API requests" is now optional; without it the configured service default applies (it used to always send 8).
 - The "Grouping terminal events" stage is gone; events are grouped while boundaries are found.
