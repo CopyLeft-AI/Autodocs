@@ -17,6 +17,7 @@ from lxml import etree
 import httpx
 
 from cloudtemple import chat_completion
+from context_window import estimate_tokens, history_budget, newest_that_fit
 
 SUMMARY_WORD_LIMIT = int(os.getenv("SUMMARY_WORD_LIMIT", "50"))
 LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").lower()
@@ -181,10 +182,14 @@ def compute_curr_depth_upto(events: List[Event], idx: int) -> int:
     return curr
 
 
-def make_flush_package(events: List[Event], upto_idx: int, K: int = 1, N: int = 10) -> Dict:
+def make_flush_package(events: List[Event], upto_idx: int, K: int = 1, neighbor_budget_tokens: int = 0) -> Dict:
+    """Targets plus a sliding window of earlier annotations.
+
+    The window holds the newest earlier events whose "id/depth/summary" lines
+    fit `neighbor_budget_tokens` (0 means no neighbors).
+    """
     target_idxs = list(range(max(0, upto_idx - K + 1), upto_idx + 1))
-    start_neigh = max(0, target_idxs[0] - N)
-    neighbor_idxs = list(range(start_neigh, target_idxs[0]))
+    neighbor_idxs = list(range(0, target_idxs[0]))
 
     def get_sum(i):
         return events[i].summary_xml if (0 <= i < len(events) and events[i].summary_xml) else "???"
@@ -192,7 +197,10 @@ def make_flush_package(events: List[Event], upto_idx: int, K: int = 1, N: int = 
     def get_dep(i):
         return events[i].depth_xml if (0 <= i < len(events) and events[i].depth_xml is not None) else 999
 
-    neighbor_info = [f"- id={i} depth={get_dep(i)}  summary={get_sum(i)}" for i in neighbor_idxs]
+    neighbor_info = newest_that_fit(
+        [f"- id={i} depth={get_dep(i)}  summary={get_sum(i)}" for i in neighbor_idxs],
+        neighbor_budget_tokens,
+    )
     target_events = [events[i].xml for i in target_idxs if 0 <= i < len(events)]
 
     return {
@@ -219,6 +227,12 @@ def build_instruction(pkg: dict) -> str:
             truncated_targets.append(f'<target id="{i}">\n{xml}\n</target>')
 
     targets_xml = "\n".join(truncated_targets)
+    neighbor_lines = pkg.get("neighbor_info") or []
+    # Same shape as the few-shot examples ("neighbor_tail:" followed by lines).
+    neighbors_block = (
+        "\n  <neighbor_tail>\n" + "\n".join(f"  {line}" for line in neighbor_lines) + "\n  </neighbor_tail>"
+        if neighbor_lines else ""
+    )
 
     return f"""<task>
 You are an expert terminal session annotator. Identify goals/subgoals and generate concise action summaries.
@@ -255,7 +269,7 @@ DEPTH SEMANTICS:
 {FEWSHOTS_BLOCK}
 </examples>
 
-<inputs>
+<inputs>{neighbors_block}
   <curr_depth>{pkg.get("currDepth", 0)}</curr_depth>
   <target_events>\n{targets_xml}\n  </target_events>
 </inputs>"""
@@ -391,8 +405,12 @@ async def annotate_one(
     text = ""
     pkg: Dict = {}
 
-    for attempt_N in [10, 5, 2, 0]:
-        pkg = make_flush_package(events, upto, N=attempt_N)
+    # Window size: whatever the context buffer leaves after the fixed prompt and
+    # the answer. If the server still says it is too long, shrink the window.
+    base_tokens = estimate_tokens(build_instruction(make_flush_package(events, upto)))
+    budget = history_budget(base_tokens, MAX_NEW_TOKENS)
+    for attempt_budget in dict.fromkeys([budget, budget // 2, budget // 5, 0]):
+        pkg = make_flush_package(events, upto, neighbor_budget_tokens=attempt_budget)
         instr = build_instruction(pkg)
         try:
             text = await generate(client, instr)

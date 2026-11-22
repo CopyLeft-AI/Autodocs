@@ -10,7 +10,6 @@ import httpx
 import model0
 import model1
 import parser0
-from concurrency import effective_concurrency
 from event_stream import EventSplitter
 from job_control import JobControl
 from job_store import JobStore
@@ -110,7 +109,7 @@ class JobRunner:
 
         chunks = model0.extract_chunks(flat_xml)
         total_chunks = len(chunks)
-        parallel = effective_concurrency(state.get("requestedConcurrency"))
+        parallel = model0.boundary_concurrency(state.get("requestedConcurrency"))
         await self.store.set_parallel_requests(job_id, parallel)
         mode = f" ({parallel} requests in parallel)" if parallel > 1 else ""
         await self.store.stage(job_id, "boundaries", total_chunks, f"Checking 0 of {total_chunks} terminal chunks for event boundaries{mode}.")
