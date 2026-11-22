@@ -89,8 +89,12 @@ class JobRunner:
         if timer:
             timer.cancel()
         task = self.job_tasks.get(job_id)
-        if task:
+        if task is not None:
+            # The supervisor removes the control in its finally block.
             task.cancel()
+        else:
+            # Paused scheduled retries have no active supervisor.
+            self.controls.pop(job_id, None)
         return state
 
     def _control(self, job_id: str) -> JobControl:

@@ -203,3 +203,85 @@ def test_paused_scheduled_retry_survives_restart():
             assert new_runner.queue.get_nowait() == job_id
 
     asyncio.run(scenario())
+
+
+def test_cancel_paused_retry_removes_control_without_timer():
+    """A paused retry without a worker must not leak JobControl."""
+    async def scenario():
+        with TemporaryDirectory() as directory:
+            store = JobStore(directory)
+            job_id = "cancel-paused-no-timer"
+            await store.create(job_id, "Synthetic", "input")
+
+            assert await store.running(job_id)
+            assert await store.defer_network_retry(
+                job_id, attempt=1, delay_seconds=60
+            )
+
+            runner = JobRunner(store, max_concurrent_jobs=1)
+
+            paused = await runner.pause(job_id)
+            assert paused["status"] == "paused"
+            assert job_id in runner.controls
+            assert job_id not in runner.job_tasks
+            assert job_id not in runner.retry_tasks
+
+            cancelled = await runner.cancel(job_id)
+
+            assert cancelled["status"] == "cancelled"
+            assert job_id not in runner.controls
+            assert job_id not in runner.job_tasks
+            assert job_id not in runner.retry_tasks
+            assert (await store.status(job_id))["status"] == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_cancel_paused_retry_removes_control_after_timer_cancel():
+    """Pause, then cancel a scheduled retry with an existing timer."""
+    async def scenario():
+        with TemporaryDirectory() as directory:
+            store = JobStore(directory)
+            job_id = "cancel-paused-with-timer"
+            await store.create(job_id, "Synthetic", "input")
+
+            assert await store.running(job_id)
+            assert await store.defer_network_retry(
+                job_id, attempt=1, delay_seconds=60
+            )
+
+            runner = JobRunner(store, max_concurrent_jobs=1)
+
+            try:
+                await runner.start()
+
+                for _ in range(200):
+                    if job_id in runner.retry_tasks:
+                        break
+                    await asyncio.sleep(0.01)
+
+                assert job_id in runner.retry_tasks
+                timer = runner.retry_tasks[job_id]
+
+                paused = await runner.pause(job_id)
+                assert paused["status"] == "paused"
+                assert job_id in runner.controls
+                assert job_id not in runner.retry_tasks
+                assert job_id not in runner.job_tasks
+
+                cancelled = await runner.cancel(job_id)
+                assert cancelled["status"] == "cancelled"
+
+                await asyncio.gather(timer, return_exceptions=True)
+
+                assert job_id not in runner.controls
+                assert job_id not in runner.job_tasks
+                assert job_id not in runner.retry_tasks
+                assert (await store.status(job_id))["status"] == "cancelled"
+
+            finally:
+                await runner.stop()
+
+    asyncio.run(scenario())
+
+
