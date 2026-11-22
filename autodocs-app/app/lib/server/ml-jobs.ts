@@ -33,6 +33,12 @@ export interface MlJobStatus {
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
+  /** Number of scheduled network retries. */
+  retryCount?: number;
+  /** UTC timestamp of the next retry, if one is scheduled. */
+  nextRetryAt?: string | null;
+  /** Number of recoveries after an interrupted service run. */
+  restartRecoveryCount?: number;
   /** Estimated seconds left; null until enough work has finished to estimate. */
   etaSeconds: number | null;
   resources: MlJobResources | null;

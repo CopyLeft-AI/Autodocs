@@ -19,7 +19,10 @@ function headline(job: MlJobStatus): string {
         case 'cancelled': return 'Analysis cancelled';
         case 'completed': return 'Analysis complete';
         case 'paused': return 'Analysis paused';
-        case 'queued': return 'Analysis queued';
+        case 'queued':
+            return job.nextRetryAt
+                ? 'Analysis retry scheduled'
+                : 'Analysis queued';
         default: return 'Analysis in progress';
     }
 }
@@ -27,6 +30,23 @@ function headline(job: MlJobStatus): string {
 function subline(job: MlJobStatus): string {
     if (job.status === 'failed') return job.error ?? 'The analysis failed.';
     if (job.status === 'cancelled') return 'Stopped before it finished. Nothing was saved.';
+    if (job.status === 'paused' && job.nextRetryAt) {
+        return 'Connection retry paused. Resume to continue automatically.';
+    }
+    if (job.status === 'queued' && job.nextRetryAt) {
+        const remaining = Math.ceil(
+            (Date.parse(job.nextRetryAt) - Date.now()) / 1000
+        );
+        const retry = job.retryCount ?? 1;
+
+        if (!Number.isFinite(remaining)) {
+            return 'Connection temporarily unavailable. Automatic retry scheduled.';
+        }
+        if (remaining > 0) {
+            return `Connection temporarily unavailable · retry ${retry} in ${formatSeconds(remaining)}.`;
+        }
+        return `Connection temporarily unavailable · retry ${retry} waiting for a worker.`;
+    }
     if (job.status === 'queued') return 'Waiting for a free inference worker.';
     const eta = job.status === 'running' ? formatEta(job.etaSeconds) : null;
     return [`${job.title}`, `${elapsed(job)} since upload`, `${job.percent}% complete`, eta].filter(Boolean).join(' · ');
