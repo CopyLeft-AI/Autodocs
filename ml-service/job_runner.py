@@ -70,6 +70,10 @@ class JobRunner:
     async def pause(self, job_id: str) -> dict:
         state = await self.store.pause(job_id)
         self._control(job_id).pause()
+        # A scheduled retry must not wake up while its job is paused.
+        timer = self.retry_tasks.pop(job_id, None)
+        if timer is not None:
+            timer.cancel()
         return state
 
     async def resume(self, job_id: str) -> dict:
@@ -137,7 +141,7 @@ class JobRunner:
         except asyncio.CancelledError:
             if not task.cancelled() or asyncio.current_task().cancelling():
                 raise  # The worker itself is shutting down, not a job cancel.
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+        except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError):
             state = await self.store.status(job_id)
             retry_number = int(state.get("retryCount", 0)) + 1
 

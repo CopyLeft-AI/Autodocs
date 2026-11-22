@@ -89,11 +89,15 @@ class JobStore:
             return True
 
     async def pause(self, job_id: str) -> dict[str, Any]:
-        """Mark a running job paused; the runner halts at its next checkpoint."""
+        """Pause a running job or a queued network retry."""
         async with self._lock:
             state = self._load(job_id)
-            if state["status"] != "running":
-                raise ValueError("Only running jobs can be paused.")
+            if state["status"] != "running" and not (
+                state["status"] == "queued" and state.get("nextRetryAt")
+            ):
+                raise ValueError(
+                    "Only running jobs or scheduled network retries can be paused."
+                )
             state.update(status="paused", pausedAt=self._now())
             self._append_event(state, "paused", "Analysis paused; it will stop after the current step finishes.")
             self._touch(state)

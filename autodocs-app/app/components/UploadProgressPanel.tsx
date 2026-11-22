@@ -93,6 +93,7 @@ export function UploadProgressPanel({ job, isBusy, onControl, onDelete, onDismis
     const complete = job.status === 'completed';
     const paused = job.status === 'paused';
     const isActive = job.status === 'queued' || job.status === 'running' || paused;
+    const canPause = job.status === 'running' || (job.status === 'queued' && Boolean(job.nextRetryAt));
     const barColor = failed ? 'bg-destructive' : complete ? 'bg-emerald-400' : cancelled || paused ? 'bg-muted-foreground' : 'bg-primary';
     const border = failed ? 'border-destructive/40 bg-destructive/5'
         : complete ? 'border-emerald-500/40 bg-emerald-500/5'
@@ -119,7 +120,7 @@ export function UploadProgressPanel({ job, isBusy, onControl, onDelete, onDismis
             </div>
 
             <div className="flex flex-wrap items-center gap-2 mb-4">
-                {job.status === 'running' && <ControlButton label="Pause" icon={<IconPlayerPause size={14} />} disabled={isBusy} onClick={() => onControl('pause')} />}
+                {canPause && <ControlButton label="Pause" icon={<IconPlayerPause size={14} />} disabled={isBusy} onClick={() => onControl('pause')} />}
                 {paused && <ControlButton label="Resume" icon={<IconPlayerPlay size={14} />} disabled={isBusy} onClick={() => onControl('resume')} />}
                 {isActive && (
                     <ControlButton
