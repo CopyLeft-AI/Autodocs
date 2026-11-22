@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       id: string;
       email: string;
       name: string;
-      password_hash: string;
+      password_hash: string | null;
       created_at: string;
     }>(
       `SELECT id, email, name, password_hash, created_at
@@ -37,7 +37,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Invalid email or password.' }, { status: 401 });
     }
 
-    const passwordOk = await bcrypt.compare(password, user.password_hash);
+    // Accounts created through single sign-on have no password and can only sign in through their provider.
+    const passwordOk = user.password_hash !== null && (await bcrypt.compare(password, user.password_hash));
     if (!passwordOk) {
       return NextResponse.json({ message: 'Invalid email or password.' }, { status: 401 });
     }
