@@ -82,7 +82,7 @@ class JobStore:
             state = self._load(job_id)
             if state["status"] != "queued":
                 return False
-            state.update(status="running", startedAt=self._now(), nextRetryAt=None)
+            state.update(status="running", startedAt=self._now(), nextRetryAt=None, pausedAt=None, pausedSeconds=0.0)
             self._append_event(state, "started", "Inference worker started.")
             self._touch(state)
             self._write_json(self._state_path(job_id), state)

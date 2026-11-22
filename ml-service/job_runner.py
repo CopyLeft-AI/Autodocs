@@ -53,13 +53,16 @@ class JobRunner:
         ]
 
     async def stop(self) -> None:
+        # Workers can schedule new retry timers. Stop them first so the
+        # timer snapshot below includes every remaining scheduled retry.
+        for task in self.worker_tasks:
+            task.cancel()
+        await asyncio.gather(*self.worker_tasks, return_exceptions=True)
+
         timers = list(self.retry_tasks.values())
         for task in timers:
             task.cancel()
         await asyncio.gather(*timers, return_exceptions=True)
-        for task in self.worker_tasks:
-            task.cancel()
-        await asyncio.gather(*self.worker_tasks, return_exceptions=True)
 
     async def enqueue(self, job_id: str) -> None:
         await self.queue.put(job_id)
