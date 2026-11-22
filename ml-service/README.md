@@ -101,6 +101,13 @@ Apply `autodocs-app/db/init/004_processing_jobs.sql` to existing Postgres
 databases before enabling this mode. See the [web app README](../autodocs-app/README.md#local-cpu-inference-option)
 for the full migration and behavior notes.
 
+## API documentation
+
+FastAPI generates the OpenAPI description and a Swagger page: open `http://127.0.0.1:8500/docs`
+(raw description at `/openapi.json`) when you run the service directly. In a deployment the web app shows
+the same page at `/ml-service/docs` to administrators and proxies the calls, so the service does not need
+to be reachable from browsers.
+
 ## Compatibility
 
 `AUTODOCS_PROCESSING_MODE` is deliberately opt-in. When it is absent, the web
