@@ -286,3 +286,71 @@ def test_token_limit_error_is_not_retried(monkeypatch):
         asyncio.run(execute())
 
     assert len(calls) == 1
+
+
+def test_long_retry_after_is_deferred_to_persistent_scheduler(monkeypatch):
+    """A long provider cooldown must not be shortened or slept in-process."""
+    configure(monkeypatch)
+    calls = []
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(cloudtemple.asyncio, "sleep", fake_sleep)
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "600"},
+            json={"error": "rate limit"},
+        )
+
+    async def execute():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            await cloudtemple.chat_completion(
+                client,
+                model="test-model",
+                prompt="Synthetic test prompt",
+                max_tokens=128,
+                timeout_seconds=10,
+            )
+
+    with pytest.raises(httpx.HTTPStatusError) as error:
+        asyncio.run(execute())
+
+    assert error.value.response.status_code == 429
+    assert len(calls) == 1
+    assert delays == []
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("600", 600.0),
+        ("7200", 7200.0),
+        ("invalid", None),
+        ("-5", None),
+        ("nan", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_parse_retry_after_values(header, expected):
+    assert cloudtemple.parse_retry_after_seconds(header) == expected
+
+
+def test_parse_retry_after_http_date():
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    deadline = datetime.now(timezone.utc) + timedelta(hours=2)
+    header = format_datetime(deadline, usegmt=True)
+
+    delay = cloudtemple.parse_retry_after_seconds(header)
+
+    assert delay is not None
+    assert 7190 <= delay <= 7200

@@ -187,7 +187,7 @@ class JobStore:
         from datetime import timedelta
         import math
 
-        if attempt < 1 or not math.isfinite(delay_seconds) or not 0 <= delay_seconds <= 3600:
+        if attempt < 1 or not math.isfinite(delay_seconds) or delay_seconds < 0:
             raise ValueError("Invalid network retry parameters")
 
         async with self._lock:
@@ -198,10 +198,12 @@ class JobStore:
                 return False
             was_paused = state["status"] == "paused"
 
-            next_retry_at = (
-                datetime.now(timezone.utc)
-                + timedelta(seconds=delay_seconds)
-            ).isoformat()
+            try:
+                deadline = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            except OverflowError:
+                # Keep an unrepresentably distant cooldown persisted.
+                deadline = datetime.max.replace(tzinfo=timezone.utc)
+            next_retry_at = deadline.isoformat()
 
             state.update(
                 status="paused" if was_paused else "queued",

@@ -3,6 +3,8 @@
 import asyncio
 import math
 import os
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -52,6 +54,9 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
                 raise
 
             retry_after = error.response.headers.get("Retry-After")
+            provider_delay = parse_retry_after_seconds(retry_after)
+            if provider_delay is not None and provider_delay > 30.0:
+                raise  # Delegate long cooldowns to the persistent scheduler.
 
         except httpx.TransportError:
             if attempt == max_attempts:
@@ -102,3 +107,32 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
         await asyncio.sleep(delay)
 
     raise RuntimeError("Cloud Temple exhausted retry attempts")
+
+
+def parse_retry_after_seconds(value: str | None) -> float | None:
+    """Parse Retry-After seconds or an HTTP-date as a minimum cooldown."""
+    if value is None:
+        return None
+
+    value = value.strip()
+    if not value:
+        return None
+
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            deadline = parsedate_to_datetime(value)
+            if deadline.tzinfo is None:
+                return None
+            seconds = max(
+                0.0,
+                (deadline - datetime.now(timezone.utc)).total_seconds(),
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+
+    return seconds

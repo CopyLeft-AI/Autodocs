@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 
+from cloudtemple import parse_retry_after_seconds
 import model0
 import model1
 import parser0
@@ -173,6 +174,12 @@ class JobRunner:
             if retry_number <= self.max_network_retries:
                 base_delay = min(300.0, 2.0 ** min(retry_number, 9))
                 delay = min(300.0, base_delay * random.uniform(0.8, 1.2))
+                if isinstance(error, httpx.HTTPStatusError):
+                    provider_delay = parse_retry_after_seconds(
+                        error.response.headers.get("Retry-After")
+                    )
+                    if provider_delay is not None:
+                        delay = max(delay, provider_delay)
 
                 if await self.store.defer_network_retry(
                     job_id, retry_number, delay
