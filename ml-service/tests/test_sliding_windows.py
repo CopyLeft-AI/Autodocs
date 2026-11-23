@@ -83,7 +83,7 @@ def run_stream(monkeypatch, mode: str, count: int = 6):
     monkeypatch.setenv("AUTODOCS_BOUNDARY_HISTORY", mode)
     seen: list[str] = []
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None, **options):
         seen.append(prompt)
         return "new" if len(seen) % 3 == 1 else "old"
 
@@ -141,11 +141,11 @@ def test_neighbor_window_is_sized_by_budget_not_a_fixed_count():
 
 
 def test_annotate_one_sends_earlier_summaries_and_shrinks_on_overflow(monkeypatch):
-    monkeypatch.setattr(model1, "MAX_NEW_TOKENS", 100)
+    monkeypatch.setenv("MAX_NEW_TOKENS", "100")
     events = annotated(600)
     sizes: list[int] = []
 
-    async def fake_generate(client, instruction):
+    async def fake_generate(client, instruction, step=None, **options):
         sizes.append(instruction.count("summary=Step"))
         if len(sizes) == 1:
             request = httpx.Request("POST", "http://x")

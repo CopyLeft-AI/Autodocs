@@ -17,18 +17,8 @@ from lxml import etree
 import httpx
 
 from cloudtemple import chat_completion
+from config import StepConfig, load_config
 from context_window import estimate_tokens, history_budget, newest_that_fit
-
-SUMMARY_WORD_LIMIT = int(os.getenv("SUMMARY_WORD_LIMIT", "50"))
-LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").lower()
-LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "").rstrip("/")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-MODEL1_NAME = os.getenv("MODEL1_NAME", "gpt-oss:20b")
-MODEL1_REASONING_EFFORT = os.getenv("MODEL1_REASONING_EFFORT", "low")
-MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "2000"))
-# See model0.py's NUM_THREAD comment -- Ollama defaults to n_threads=1
-# unless told otherwise per-request.
-NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", str(os.cpu_count() or 1)))
 
 FEWSHOTS_BLOCK = """
 EXAMPLES (for reference only)
@@ -211,7 +201,7 @@ def make_flush_package(events: List[Event], upto_idx: int, K: int = 1, neighbor_
     }
 
 
-def build_instruction(pkg: dict) -> str:
+def build_instruction(pkg: dict, summary_word_limit: int = 50) -> str:
     MAX_CHARS = 3000
     truncated_targets = []
 
@@ -257,7 +247,7 @@ You are an expert terminal session annotator. Identify goals/subgoals and genera
 <output_format>
 You MUST wrap your reasoning in <think>...</think> tags.
 After the closing </think> tag, you MUST output EXACTLY ONE valid JSON object on a new line. Do not output anything after the JSON.
-{{"annotation": "<action summary ≤{SUMMARY_WORD_LIMIT} words>", "depth": <integer ≥ -1>}}
+{{"annotation": "<action summary ≤{summary_word_limit} words>", "depth": <integer ≥ -1>}}
 </output_format>
 
 DEPTH SEMANTICS:
@@ -297,39 +287,44 @@ def parse_depth_summary_pairs(text: str) -> List[Tuple[int, str]]:
     return out
 
 
-async def generate(client: httpx.AsyncClient, instruction: str) -> str:
-    if LLM_BACKEND == "cloudtemple":
+async def generate(client: httpx.AsyncClient, instruction: str, step: Optional[StepConfig] = None, *, defer_long_retries: bool = False) -> str:
+    """Send one annotation prompt to the configured summary model; return its text."""
+    step = step or load_config().steps["annotate"]
+
+    if step.is_chat:
         return await chat_completion(
             client,
-            model=MODEL1_NAME,
+            model=step.model,
             prompt=instruction,
-            max_tokens=MAX_NEW_TOKENS,
-            timeout_seconds=float(
-                os.getenv("CLOUDTEMPLE_MODEL1_TIMEOUT_SECONDS", "600")
-            ),
+            max_tokens=step.max_tokens,
+            timeout_seconds=step.timeout_seconds,
+            base_url=step.base_url,
+            api_key=step.api_key,
+            max_attempts=step.max_attempts,
+            defer_long_retries=defer_long_retries,
         )
 
-    if LLM_BACKEND == "llamacpp":
-        if not LLAMACPP_BASE_URL:
-            raise ValueError("LLAMACPP_BASE_URL must be configured")
+    if step.backend == "llamacpp":
+        if not step.base_url:
+            raise ValueError("The annotate step needs a base URL for llama.cpp")
 
         chunks: list[str] = []
         truncated = False
 
         async with client.stream(
             "POST",
-            f"{LLAMACPP_BASE_URL}/chat/completions",
+            f"{step.base_url}/chat/completions",
             json={
-                "model": MODEL1_NAME,
+                "model": step.model,
                 "messages": [{"role": "user", "content": instruction}],
                 "stream": True,
                 "temperature": 0.0,
-                "max_tokens": MAX_NEW_TOKENS,
+                "max_tokens": step.max_tokens,
                 "repeat_penalty": 1.2,
             },
             timeout=httpx.Timeout(
                 connect=30.0,
-                read=1800.0,
+                read=step.timeout_seconds,
                 write=30.0,
                 pool=30.0,
             ),
@@ -357,24 +352,25 @@ async def generate(client: httpx.AsyncClient, instruction: str) -> str:
             )
         return "".join(chunks)
 
-    if LLM_BACKEND != "ollama":
-        raise ValueError(f"Unsupported LLM_BACKEND: {LLM_BACKEND}")
+    if step.backend != "ollama":
+        raise ValueError(f"Unsupported backend: {step.backend}")
 
     resp = await client.post(
-        f"{OLLAMA_URL}/api/chat",
+        f"{step.base_url}/api/chat",
         json={
-            "model": MODEL1_NAME,
+            "model": step.model,
             "messages": [{"role": "user", "content": instruction}],
             "stream": False,
-            "think": MODEL1_REASONING_EFFORT,
+            "think": step.reasoning_effort,
             "options": {
                 "temperature": 0.0,
-                "num_predict": MAX_NEW_TOKENS,
+                "num_predict": step.max_tokens,
                 "repeat_penalty": 1.2,
-                "num_thread": NUM_THREAD,
+                # Ollama defaults to n_threads=1 unless told per request.
+                "num_thread": step.num_thread,
             },
         },
-        timeout=600.0,
+        timeout=step.timeout_seconds,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -393,6 +389,9 @@ async def annotate_one(
     events: List[Event],
     upto: int,
     client: httpx.AsyncClient,
+    step: Optional[StepConfig] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> Optional[Dict[str, object]]:
     """Annotate events[upto], using only events[:upto] as context.
 
@@ -400,20 +399,22 @@ async def annotate_one(
     model gave no usable answer for an oversized event. Because it reads no
     event after `upto`, events can be appended while earlier ones are annotated.
     """
+    step = step or load_config().steps["annotate"]
     success = False
     invalid_response_seen = False
     text = ""
     pkg: Dict = {}
+    retry_options = {"defer_long_retries": True} if defer_long_retries else {}
 
     # Window size: whatever the context buffer leaves after the fixed prompt and
     # the answer. If the server still says it is too long, shrink the window.
-    base_tokens = estimate_tokens(build_instruction(make_flush_package(events, upto)))
-    budget = history_budget(base_tokens, MAX_NEW_TOKENS)
+    base_tokens = estimate_tokens(build_instruction(make_flush_package(events, upto), step.summary_word_limit))
+    budget = history_budget(base_tokens, step.max_tokens)
     for attempt_budget in dict.fromkeys([budget, budget // 2, budget // 5, 0]):
         pkg = make_flush_package(events, upto, neighbor_budget_tokens=attempt_budget)
-        instr = build_instruction(pkg)
+        instr = build_instruction(pkg, step.summary_word_limit)
         try:
-            text = await generate(client, instr)
+            text = await generate(client, instr, step, **retry_options)
             if parse_depth_summary_pairs(text):
                 success = True
                 break
@@ -445,11 +446,15 @@ async def annotate_events(
     events: List[Event],
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
+    step: Optional[StepConfig] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> Dict[int, Dict[str, object]]:
+    step = step or load_config().steps["annotate"]
     pred: Dict[int, Dict[str, object]] = {}
 
     for upto in range(len(events)):
-        result = await annotate_one(events, upto, client)
+        result = await annotate_one(events, upto, client, step, defer_long_retries=defer_long_retries)
         if result is not None:
             pred[upto] = result
 

@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Gauge, KeyRound } from 'lucide-react';
+import { RightsAdmin } from '@/app/components/RightsAdmin';
+import { SsoProvidersAdmin } from '@/app/components/SsoProvidersAdmin';
+import { usePermissions } from '@/app/lib/use-permissions';
+import { InferenceSettingsCard } from '@/app/components/InferenceSettingsCard';
 
 const MASKED_PASSWORD = '........';
+
+const TAB_LABELS = { general: 'General', users: 'Users', groups: 'Groups', sso: 'Single sign-on' } as const;
 
 function ChangeButton({ onClick }: { onClick?: () => void }) {
   return (
@@ -19,13 +25,14 @@ function ChangeButton({ onClick }: { onClick?: () => void }) {
 }
 
 interface ProcessingSettings {
-  remoteApiConcurrency: number;
-  limits: { min: number; max: number; default: number };
+  /** null: the user has no limit of their own and the service default applies. */
+  remoteApiConcurrency: number | null;
+  limits: { min: number; max: number };
   message?: string;
 }
 
 /** Edits how many model requests one analysis may send in parallel to a remote API. */
-function ProcessingSettingsCard() {
+function ProcessingSettingsCard({ canEdit }: { canEdit: boolean }) {
   const [saved, setSaved] = useState<ProcessingSettings | null>(null);
   const [draft, setDraft] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -39,7 +46,7 @@ function ProcessingSettingsCard() {
         if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
         const data = (await response.json()) as ProcessingSettings;
         setSaved(data);
-        setDraft(String(data.remoteApiConcurrency));
+        setDraft(data.remoteApiConcurrency === null ? '' : String(data.remoteApiConcurrency));
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load settings.');
       }
@@ -47,9 +54,9 @@ function ProcessingSettingsCard() {
     void load();
   }, []);
 
-  const parsed = Number(draft);
+  const parsed = draft.trim() === '' ? null : Number(draft);
   const limits = saved?.limits;
-  const isValid = Boolean(limits) && draft.trim() !== '' && Number.isInteger(parsed) && parsed >= (limits?.min ?? 1) && parsed <= (limits?.max ?? 32);
+  const isValid = Boolean(limits) && (parsed === null || Number.isInteger(parsed)) && (parsed === null || (parsed >= (limits?.min ?? 1) && parsed <= (limits?.max ?? 32)));
   const isUnchanged = saved !== null && parsed === saved.remoteApiConcurrency;
 
   const handleSave = async () => {
@@ -67,6 +74,7 @@ function ProcessingSettingsCard() {
       const data = (await response.json().catch(() => ({}))) as ProcessingSettings;
       if (!response.ok) throw new Error(data.message ?? `Request failed with status ${response.status}`);
       setSaved(data);
+      setDraft(data.remoteApiConcurrency === null ? '' : String(data.remoteApiConcurrency));
       setStatusMessage('Saved. It applies to analyses you start from now on.');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings.');
@@ -97,7 +105,7 @@ function ProcessingSettingsCard() {
           </label>
           <p className="mt-2 text-xs text-muted-foreground">
             How many requests one analysis sends at the same time when it uses a remote API
-            (default {limits?.default ?? 8}, from {limits?.min ?? 1} to {limits?.max ?? 32}). Analyses
+            (from {limits?.min ?? 1} to {limits?.max ?? 32}; leave empty to use the service default shown under Inference). Analyses
             that run on this machine ignore it and work one request at a time.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -109,14 +117,15 @@ function ProcessingSettingsCard() {
               max={limits?.max ?? 32}
               step={1}
               value={draft}
-              disabled={!saved || isSaving}
+              placeholder="default"
+              disabled={!saved || isSaving || !canEdit}
               onChange={(event) => setDraft(event.target.value)}
               className="w-24 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:opacity-60"
             />
             <button
               type="button"
               onClick={() => void handleSave()}
-              disabled={isSaving || !isValid || isUnchanged}
+              disabled={!canEdit || isSaving || !isValid || isUnchanged}
               className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? 'Saving...' : 'Save'}
@@ -133,6 +142,9 @@ function ProcessingSettingsCard() {
 }
 
 export function SettingsPanel() {
+  const permissions = usePermissions();
+  const [tab, setTab] = useState<'general' | 'users' | 'groups' | 'sso'>('general');
+  const canEdit = permissions?.canEditSettings ?? false;
   const [isEditing, setIsEditing] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -199,8 +211,26 @@ export function SettingsPanel() {
         </p>
       </div>
 
-      <div className="space-y-5">
-        <ProcessingSettingsCard />
+      {permissions?.isAdmin && (
+        <div className="mb-5 flex gap-2" role="tablist">
+          {(['general', 'users', 'groups', 'sso'] as const).map((id) => (
+            <button
+              key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+              className={`rounded-lg border px-4 py-2 text-sm transition-colors ${tab === id ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
+            >
+              {TAB_LABELS[id]}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {permissions?.isAdmin && (tab === 'users' || tab === 'groups') && <RightsAdmin key={tab} view={tab} />}
+      {permissions?.isAdmin && tab === 'sso' && <SsoProvidersAdmin />}
+
+      <div className="space-y-5" hidden={permissions?.isAdmin === true && tab !== 'general'}>
+        <InferenceSettingsCard canEdit={canEdit} />
+
+        <ProcessingSettingsCard canEdit={canEdit} />
 
         <div className="bg-card rounded-xl border border-border p-6 hover:bg-accent/10 transition-colors">
           <p className="mb-5 text-xs font-mono uppercase tracking-[0.24em] text-muted-foreground">

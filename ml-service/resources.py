@@ -15,25 +15,27 @@ from urllib.parse import urlparse
 
 import psutil
 
+from config import ServiceConfig, StepConfig, load_config
+
 CACHE_SECONDS = 2.0
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
-def is_local_inference() -> bool:
-    """True when the configured LLM backend runs on this machine.
+def is_local_step(step: StepConfig, location: str = "auto") -> bool:
+    """True when this step's model runs on this machine.
 
-    AUTODOCS_INFERENCE_LOCATION=local|remote overrides the detection, for
-    example to treat a private-network inference host as remote.
+    `location` ("local" or "remote") overrides the detection, for example to
+    treat a private-network inference host as remote.
     """
-    override = os.getenv("AUTODOCS_INFERENCE_LOCATION", "auto").lower()
-    if override in ("local", "remote"):
-        return override == "local"
-    backend = os.getenv("LLM_BACKEND", "ollama").lower()
-    if backend == "cloudtemple":
-        return False
-    url = os.getenv("LLAMACPP_BASE_URL") if backend == "llamacpp" else os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-    host = urlparse(url or "").hostname
-    return host in LOOPBACK_HOSTS
+    if location in ("local", "remote"):
+        return location == "local"
+    return urlparse(step.base_url).hostname in LOOPBACK_HOSTS
+
+
+def is_local_inference(config: ServiceConfig | None = None) -> bool:
+    """True when at least one step runs on this machine, so local load is meaningful."""
+    config = config or load_config()
+    return any(is_local_step(step, config.inference_location) for step in config.steps.values())
 
 
 def _read_gpu_utilization() -> list[float]:

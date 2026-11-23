@@ -71,4 +71,4 @@ def boundary_history_enabled(backend: str) -> bool:
         return True
     if setting in ("off", "false", "0", "no"):
         return False
-    return backend == "cloudtemple"
+    return backend in ("cloudtemple", "openai")

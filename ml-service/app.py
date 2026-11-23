@@ -21,6 +21,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+import config as service_config
 import model0
 import model1
 import parser0
@@ -48,7 +49,22 @@ async def lifespan(_: FastAPI):
         await job_runner.stop()
 
 
-app = FastAPI(title="autodocs-ml-service", lifespan=lifespan)
+API_DESCRIPTION = """
+Analysis service of AutoDocs: turns asciinema recordings into event summaries with
+local or remote language models.
+
+It has no login of its own. In a deployment it sits behind the web app, which shows
+this page at `/ml-service/docs` to administrators only.
+"""
+
+OPENAPI_TAGS = [
+    {"name": "Configuration", "description": "Which model and inference source each analysis step uses."},
+    {"name": "Analysis jobs", "description": "Queued background analyses that can be paused, resumed and cancelled."},
+    {"name": "Legacy", "description": "Synchronous analysis kept for older clients."},
+    {"name": "Health", "description": "Liveness check."},
+]
+
+app = FastAPI(title="autodocs-ml-service", version="1.0.0", description=API_DESCRIPTION, openapi_tags=OPENAPI_TAGS, lifespan=lifespan)
 
 
 class RecordingRequest(BaseModel):
@@ -77,12 +93,32 @@ async def with_live_fields(state: dict) -> dict:
     }
 
 
-@app.get("/health")
+@app.get("/config", tags=["Configuration"], summary="Read the settings")
+async def get_config():
+    """Current settings (stored and effective values; API keys are never returned)."""
+    try:
+        return service_config.public_view(service_config.read_file_config())
+    except service_config.ConfigError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.put("/config", tags=["Configuration"], summary="Change the settings")
+async def update_config(body: dict):
+    """Merge the given settings into the config file. Applies to jobs started afterwards."""
+    try:
+        return service_config.public_view(service_config.update_file_config(body))
+    except service_config.ConfigError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Could not write the config file: {error}") from error
+
+
+@app.get("/health", tags=["Health"], summary="Liveness check")
 async def health():
     return {"status": "ok"}
 
 
-@app.post("/jobs")
+@app.post("/jobs", tags=["Analysis jobs"], summary="Queue a recording for analysis")
 async def create_job(body: JobRequest):
     try:
         state = await job_store.create(body.jobId, body.title, body.content, body.parallelRequests)
@@ -92,7 +128,7 @@ async def create_job(body: JobRequest):
     return await with_live_fields(state)
 
 
-@app.get("/jobs/{job_id}")
+@app.get("/jobs/{job_id}", tags=["Analysis jobs"], summary="Progress and result of a job")
 async def get_job(job_id: str):
     try:
         return await with_live_fields(await job_store.status(job_id))
@@ -110,22 +146,22 @@ async def control_job(job_id: UUID, action):
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
-@app.post("/jobs/{job_id}/pause")
+@app.post("/jobs/{job_id}/pause", tags=["Analysis jobs"], summary="Pause a running job")
 async def pause_job(job_id: UUID):
     return await control_job(job_id, job_runner.pause)
 
 
-@app.post("/jobs/{job_id}/resume")
+@app.post("/jobs/{job_id}/resume", tags=["Analysis jobs"], summary="Resume a paused job")
 async def resume_job(job_id: UUID):
     return await control_job(job_id, job_runner.resume)
 
 
-@app.post("/jobs/{job_id}/cancel")
+@app.post("/jobs/{job_id}/cancel", tags=["Analysis jobs"], summary="Cancel a job")
 async def cancel_job(job_id: UUID):
     return await control_job(job_id, job_runner.cancel)
 
 
-@app.delete("/jobs/{job_id}")
+@app.delete("/jobs/{job_id}", tags=["Analysis jobs"], summary="Delete a finished job", responses={409: {"description": "The job is still active."}})
 async def delete_inactive_job(job_id: UUID):
     try:
         await job_store.delete_inactive(str(job_id))
@@ -136,7 +172,7 @@ async def delete_inactive_job(job_id: UUID):
     return {"deleted": True}
 
 
-@app.post("/", response_model=RecordingResponse)
+@app.post("/", response_model=RecordingResponse, tags=["Legacy"], summary="Analyse a recording and wait for the result")
 async def process_recording(body: RecordingRequest):
     title = body.title
     logger.info("processing %s (%d bytes)", title, len(body.content))

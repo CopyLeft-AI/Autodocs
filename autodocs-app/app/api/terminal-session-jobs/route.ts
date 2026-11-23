@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     const jobId = createJobId();
     await db.query(`INSERT INTO terminal_session_jobs (id, user_id, title, duration_seconds, status) VALUES ($1, $2, $3, $4, 'queued')`, [jobId, user.id, title, body.durationSeconds]);
     try {
-      const job = await enqueueMlJob({ id: jobId, title, content, parallelRequests: await readRemoteApiConcurrency(user.id) });
+      const job = await enqueueMlJob({ id: jobId, title, content, parallelRequests: (await readRemoteApiConcurrency(user.id)) ?? undefined });
       return NextResponse.json({ job }, { status: 202 });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not start analysis.';

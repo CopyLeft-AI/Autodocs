@@ -3,28 +3,35 @@
 import asyncio
 import math
 import os
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import httpx
 
 
-async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds):
-    api_key = os.getenv("CLOUDTEMPLE_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("CLOUDTEMPLE_API_KEY is not configured")
+async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds, base_url=None, api_key=None, max_attempts=None, defer_long_retries=False):
+    """OpenAI-compatible chat completion with retries.
 
-    base_url = os.getenv(
+    base_url, api_key and max_attempts come from the step configuration; when
+    omitted they fall back to the CLOUDTEMPLE_* environment variables.
+    """
+    api_key = (api_key if api_key is not None else os.getenv("CLOUDTEMPLE_API_KEY", "")).strip()
+    if not api_key:
+        raise ValueError("No API key is configured: set apiKey for this step, or CLOUDTEMPLE_API_KEY")
+
+    base_url = (base_url or os.getenv(
         "CLOUDTEMPLE_BASE_URL",
         "https://api.ai.cloud-temple.com/v1",
-    ).rstrip("/")
+    )).rstrip("/")
 
     parsed_url = urlsplit(base_url)
-    if parsed_url.scheme != "https" or not parsed_url.hostname:
-        raise ValueError("CLOUDTEMPLE_BASE_URL must be a valid HTTPS URL")
+    if parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+        raise ValueError("The API base URL must be a valid http(s) URL")
 
-    max_attempts = int(os.getenv("CLOUDTEMPLE_MAX_ATTEMPTS", "3"))
+    max_attempts = max_attempts or int(os.getenv("CLOUDTEMPLE_MAX_ATTEMPTS", "3"))
     if not 1 <= max_attempts <= 6:
-        raise ValueError("CLOUDTEMPLE_MAX_ATTEMPTS must be between 1 and 6")
+        raise ValueError("max attempts must be between 1 and 6")
 
     for attempt in range(1, max_attempts + 1):
         retry_after = None
@@ -52,6 +59,9 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
                 raise
 
             retry_after = error.response.headers.get("Retry-After")
+            provider_delay = parse_retry_after_seconds(retry_after)
+            if defer_long_retries and provider_delay is not None and provider_delay > 30.0:
+                raise  # Delegate long cooldowns to the persistent scheduler.
 
         except httpx.TransportError:
             if attempt == max_attempts:
@@ -92,13 +102,39 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
         delay = min(30.0, 2.0 ** attempt)
 
         if retry_after is not None:
-            try:
-                requested_delay = float(retry_after)
-                if math.isfinite(requested_delay) and requested_delay >= 0:
-                    delay = min(30.0, requested_delay)
-            except ValueError:
-                pass
+            requested_delay = parse_retry_after_seconds(retry_after)
+            if requested_delay is not None:
+                delay = max(delay, requested_delay)
 
         await asyncio.sleep(delay)
 
     raise RuntimeError("Cloud Temple exhausted retry attempts")
+
+
+def parse_retry_after_seconds(value: str | None) -> float | None:
+    """Parse Retry-After seconds or an HTTP-date as a minimum cooldown."""
+    if value is None:
+        return None
+
+    value = value.strip()
+    if not value:
+        return None
+
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            deadline = parsedate_to_datetime(value)
+            if deadline.tzinfo is None:
+                return None
+            seconds = max(
+                0.0,
+                (deadline - datetime.now(timezone.utc)).total_seconds(),
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+
+    return seconds
