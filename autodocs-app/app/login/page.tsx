@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { SsoButtons } from '@/app/components/SsoButtons';
 import { getSessionUser, setUser } from '@/app/lib/auth';
 
 async function loginRequest(email: string, password: string): Promise<{ user: { id: string; email: string; name: string; createdAt: string } }> {
@@ -172,6 +173,8 @@ export default function LoginPage() {
               </button>
             </div>
           </form>
+
+          <SsoButtons action="Sign in" />
 
           <p className="mt-6 text-center text-sm text-muted-foreground font-mono">
             No account?{' '}

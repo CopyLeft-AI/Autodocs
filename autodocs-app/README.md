@@ -16,6 +16,9 @@ AUTODOCS_PROCESSING_MODE="local-cpu-jobs"
 
 - `DATABASE_URL`: Postgres connection string for the app database.
 - `JWT_SECRET`: secret used to sign auth/session JWTs.
+- `APP_BASE_URL` (optional): public address of the site, such as `https://docs.example.com`. Single sign-on redirect URLs are built from it; without it they are guessed from the request headers, which is wrong behind some proxies.
+- `SSO_SECRET_KEY` (optional): key that encrypts the single sign-on client secrets stored in the database. Defaults to `JWT_SECRET`; changing either one makes the saved client secrets unreadable (enter them again).
+- `SSO_ALLOW_INSECURE_HTTP` (optional, development only): set to `true` to accept `http://` identity providers such as a local Keycloak.
 - `ML_URL`: URL for the AI service called by `POST /api/terminal-sessions`.
 - `AUTODOCS_PROCESSING_MODE`: omit this variable for the existing synchronous
   Colab/ngrok-compatible upload path. Set it to `local-cpu-jobs` only when
@@ -87,6 +90,40 @@ them. Existing databases need `db/init/007_user_rights.sql` and `008_user_groups
 
 Signup does not verify email addresses, so register the built-in administrator
 accounts before exposing the app, or anyone can claim those addresses.
+
+## Single sign-on
+
+Administrators choose how people can sign in, in Settings, "Single sign-on" tab
+(`GET /api/admin/sso/providers`, `PUT/DELETE /api/admin/sso/providers/<id>`,
+`POST /api/admin/sso/providers/<id>/test`). The tab and these APIs need the
+administrator right. Supported providers: Google, Microsoft (Entra ID), GitHub
+(including GitHub Enterprise Server), GitLab (including self-hosted), Okta, Auth0,
+Keycloak, Amazon Cognito, LinkedIn, Discord, and any OpenID Connect provider
+("Custom OpenID Connect").
+
+For each provider, create an OAuth client in its console, register the redirect URL
+shown in the provider's card (`<site address>/api/auth/sso/<id>/callback`), then
+enter the client ID, client secret and the provider-specific fields (for example the
+Okta domain). A provider appears on the login and signup pages once it is enabled.
+Client secrets are stored encrypted, are write-only, and are never returned by any API.
+"Test connection" checks that the provider's discovery document can be reached.
+
+Per provider, administrators also choose whether new accounts may be created, whether
+a sign-in may link to an existing account with the same email, whether to trust an
+email the provider does not mark as verified, and an allowed email-domain list. Only
+verified emails are accepted by default. People who sign up through single sign-on
+have no password: those accounts sign in through their provider, and the password and
+email change APIs refuse them.
+
+Existing databases need `db/init/009_sso.sql`. Notes:
+
+- OpenID Connect providers use the authorization-code flow with PKCE, `state` and
+  `nonce`, and ID tokens are verified against the provider's published keys.
+  Microsoft only marks emails as verified when the optional claims `email` and
+  `xms_edov` are enabled on the app registration.
+- The server contacts the discovery addresses administrators enter. Only administrators
+  can set them, and they must be `https://` unless `SSO_ALLOW_INSECURE_HTTP=true`.
+- SAML and Sign in with Apple are not included.
 
 ## Local CPU inference option
 

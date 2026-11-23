@@ -14,7 +14,7 @@ interface ChangePasswordBody {
 }
 
 interface UserWithPassword extends SessionUser {
-  password_hash: string;
+  password_hash: string | null;
 }
 
 async function getAuthenticatedUser(request: NextRequest): Promise<SessionUser | null> {
@@ -74,6 +74,13 @@ export async function PATCH(request: NextRequest) {
       const response = NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
       clearSessionCookies(response);
       return response;
+    }
+
+    if (currentUser.password_hash === null) {
+      return NextResponse.json(
+        { message: 'This account signs in with single sign-on and has no password.' },
+        { status: 400 },
+      );
     }
 
     const passwordOk = await bcrypt.compare(currentPassword, currentUser.password_hash);
