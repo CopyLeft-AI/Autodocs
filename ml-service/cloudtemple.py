@@ -97,12 +97,9 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
         delay = min(30.0, 2.0 ** attempt)
 
         if retry_after is not None:
-            try:
-                requested_delay = float(retry_after)
-                if math.isfinite(requested_delay) and requested_delay >= 0:
-                    delay = min(30.0, requested_delay)
-            except ValueError:
-                pass
+            requested_delay = parse_retry_after_seconds(retry_after)
+            if requested_delay is not None:
+                delay = max(delay, requested_delay)
 
         await asyncio.sleep(delay)
 

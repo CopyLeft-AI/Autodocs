@@ -146,3 +146,46 @@ def test_extremely_long_retry_after_is_persisted_safely():
             ) == datetime.max.replace(tzinfo=timezone.utc)
 
     asyncio.run(scenario())
+
+
+def test_http_date_retry_after_is_persisted():
+    """An HTTP-date cooldown must survive persistent retry scheduling."""
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    async def scenario():
+        with TemporaryDirectory() as directory:
+            store = JobStore(directory)
+            job_id = "http-date-retry-after"
+            await store.create(job_id, "Synthetic", "input")
+
+            runner = JobRunner(store, max_concurrent_jobs=1)
+
+            provider_deadline = datetime.now(timezone.utc) + timedelta(
+                seconds=600
+            )
+            retry_after = format_datetime(provider_deadline, usegmt=True)
+
+            async def fail(_job_id):
+                request = httpx.Request(
+                    "POST",
+                    "https://api.ai.cloud-temple.com/v1/chat/completions",
+                )
+                response = httpx.Response(
+                    429,
+                    headers={"Retry-After": retry_after},
+                    request=request,
+                )
+                response.raise_for_status()
+
+            runner._run = fail
+            await runner._run_supervised(job_id)
+
+            state = await store.status(job_id)
+            scheduled = datetime.fromisoformat(state["nextRetryAt"])
+
+            assert state["status"] == "queued"
+            assert state["retryCount"] == 1
+            assert scheduled >= provider_deadline.replace(microsecond=0)
+
+    asyncio.run(scenario())

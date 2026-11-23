@@ -72,7 +72,7 @@ def test_retries_503_and_429(monkeypatch):
 
     assert asyncio.run(execute()) == "READY"
     assert len(calls) == 3
-    assert delays == [2.0, 1.0]
+    assert delays == [2.0, 4.0]
 
 
 @pytest.mark.parametrize("status", [400, 401, 403])
@@ -354,3 +354,48 @@ def test_parse_retry_after_http_date():
 
     assert delay is not None
     assert 7190 <= delay <= 7200
+
+
+def test_short_http_date_retry_after_is_respected(monkeypatch):
+    """An HTTP-date cooldown below 30 seconds must not be ignored."""
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    configure(monkeypatch)
+    calls = []
+    delays = []
+    header = format_datetime(
+        datetime.now(timezone.utc) + timedelta(seconds=20),
+        usegmt=True,
+    )
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(cloudtemple.asyncio, "sleep", fake_sleep)
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": header},
+            )
+        return httpx.Response(200, json=SUCCESS)
+
+    async def execute():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            return await cloudtemple.chat_completion(
+                client,
+                model="test-model",
+                prompt="Synthetic test prompt",
+                max_tokens=128,
+                timeout_seconds=10,
+            )
+
+    assert asyncio.run(execute()) == "READY"
+    assert len(calls) == 2
+    assert len(delays) == 1
+    assert 18 <= delays[0] <= 21
