@@ -20,7 +20,14 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def is_local_inference() -> bool:
-    """True when the configured LLM backend runs on this machine."""
+    """True when the configured LLM backend runs on this machine.
+
+    AUTODOCS_INFERENCE_LOCATION=local|remote overrides the detection, for
+    example to treat a private-network inference host as remote.
+    """
+    override = os.getenv("AUTODOCS_INFERENCE_LOCATION", "auto").lower()
+    if override in ("local", "remote"):
+        return override == "local"
     backend = os.getenv("LLM_BACKEND", "ollama").lower()
     if backend == "cloudtemple":
         return False

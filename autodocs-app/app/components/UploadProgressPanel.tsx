@@ -165,7 +165,7 @@ export function UploadProgressPanel({ job, isBusy, onControl, onDelete, onDismis
                                 {stage.status === 'completed' ? <IconCheck size={15} /> : stage.status === 'running' ? <IconCircleDashed size={15} className={isActive && !paused ? 'animate-spin' : ''} /> : <IconClock size={15} />}
                             </span>
                             <span className="text-foreground flex-1">{stage.label}</span>
-                            {stage.total > 0 && <span className="font-mono text-muted-foreground">{stage.current}/{stage.total}</span>}
+                            {stage.total > 0 && <span className="font-mono text-muted-foreground">{stage.current}/{stage.estimated ? '~' : ''}{stage.total}</span>}
                         </div>
                         {stage.status !== 'pending' && (
                             <>

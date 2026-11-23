@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from 'react';
-import { Eye, EyeOff, KeyRound } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Eye, EyeOff, Gauge, KeyRound } from 'lucide-react';
 
 const MASKED_PASSWORD = '........';
 
@@ -15,6 +15,120 @@ function ChangeButton({ onClick }: { onClick?: () => void }) {
       <KeyRound className="h-4 w-4" />
       <span>Change</span>
     </button>
+  );
+}
+
+interface ProcessingSettings {
+  remoteApiConcurrency: number;
+  limits: { min: number; max: number; default: number };
+  message?: string;
+}
+
+/** Edits how many model requests one analysis may send in parallel to a remote API. */
+function ProcessingSettingsCard() {
+  const [saved, setSaved] = useState<ProcessingSettings | null>(null);
+  const [draft, setDraft] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const response = await fetch('/api/settings/processing', { credentials: 'include' });
+        if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+        const data = (await response.json()) as ProcessingSettings;
+        setSaved(data);
+        setDraft(String(data.remoteApiConcurrency));
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : 'Failed to load settings.');
+      }
+    };
+    void load();
+  }, []);
+
+  const parsed = Number(draft);
+  const limits = saved?.limits;
+  const isValid = Boolean(limits) && draft.trim() !== '' && Number.isInteger(parsed) && parsed >= (limits?.min ?? 1) && parsed <= (limits?.max ?? 32);
+  const isUnchanged = saved !== null && parsed === saved.remoteApiConcurrency;
+
+  const handleSave = async () => {
+    if (!isValid) return;
+    setIsSaving(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      const response = await fetch('/api/settings/processing', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ remoteApiConcurrency: parsed }),
+      });
+      const data = (await response.json().catch(() => ({}))) as ProcessingSettings;
+      if (!response.ok) throw new Error(data.message ?? `Request failed with status ${response.status}`);
+      setSaved(data);
+      setStatusMessage('Saved. It applies to analyses you start from now on.');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-xl border border-border p-6 hover:bg-accent/10 transition-colors">
+      <p className="mb-5 text-xs font-mono uppercase tracking-[0.24em] text-muted-foreground">
+        Analysis
+      </p>
+
+      {statusMessage && (
+        <div className="mb-5 rounded-lg border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
+          {statusMessage}
+        </div>
+      )}
+
+      <div className="flex gap-4 items-start">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Gauge className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <label htmlFor="remote-api-concurrency" className="text-xs font-mono uppercase tracking-[0.18em] text-muted-foreground">
+            Parallel API requests
+          </label>
+          <p className="mt-2 text-xs text-muted-foreground">
+            How many requests one analysis sends at the same time when it uses a remote API
+            (default {limits?.default ?? 8}, from {limits?.min ?? 1} to {limits?.max ?? 32}). Analyses
+            that run on this machine ignore it and work one request at a time.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              id="remote-api-concurrency"
+              type="number"
+              inputMode="numeric"
+              min={limits?.min ?? 1}
+              max={limits?.max ?? 32}
+              step={1}
+              value={draft}
+              disabled={!saved || isSaving}
+              onChange={(event) => setDraft(event.target.value)}
+              className="w-24 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary disabled:opacity-60"
+            />
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={isSaving || !isValid || isUnchanged}
+              className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+          {saved && !isValid && (
+            <p className="mt-2 text-sm text-destructive">Enter a whole number from {limits?.min} to {limits?.max}.</p>
+          )}
+          {errorMessage && <p className="mt-2 text-sm text-destructive">{errorMessage}</p>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -81,11 +195,13 @@ export function SettingsPanel() {
       <div className="mb-6">
         <h1 className="text-foreground mb-1">Settings</h1>
         <p className="text-muted-foreground">
-          Manage security and account access.
+          Manage analysis processing, security and account access.
         </p>
       </div>
 
       <div className="space-y-5">
+        <ProcessingSettingsCard />
+
         <div className="bg-card rounded-xl border border-border p-6 hover:bg-accent/10 transition-colors">
           <p className="mb-5 text-xs font-mono uppercase tracking-[0.24em] text-muted-foreground">
             Security

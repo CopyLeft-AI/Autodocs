@@ -37,6 +37,16 @@ Optional: `AUTODOCS_MAX_CONCURRENT_JOBS` (default `2`) sets how many jobs run
 at the same time; further uploads wait in the queue. Lower it to `1` on a
 machine where parallel inference starves each job.
 
+`AUTODOCS_REMOTE_API_CONCURRENCY` (default `8`, range 1 to 32) is how many
+model requests one job may run in parallel when inference uses a remote API.
+The web app overrides it per user (Settings, "Parallel API requests") through
+the `parallelRequests` field of `POST /jobs`. Summaries run alongside, so a
+remote job can have that many boundary requests plus one summary request in
+flight. Local inference (Ollama or llama.cpp on this machine) always uses one
+request at a time across both models. A failed request stops the job's other
+requests at once. Detection is
+automatic; set `AUTODOCS_INFERENCE_LOCATION=remote` or `local` to force it.
+
 The job directory stores raw uploaded recordings and status snapshots with
 owner-only permissions. Keep it on private storage and do not serve it over
 HTTP. Set `AUTODOCS_JOB_DIRECTORY` to a durable private location when running
@@ -77,3 +87,34 @@ Job statuses: `queued`, `running`, `paused`, `completed`, `failed`, `cancelled`.
 `resources` reports machine-wide CPU (and GPU via `nvidia-smi`) load and is
 `null` when the LLM backend is remote (`LLM_BACKEND=cloudtemple` or a
 non-loopback Ollama URL).
+
+## Processing pipeline
+
+Boundary detection classifies each terminal chunk independently, so those
+requests run in parallel (remote API only) while results are consumed in
+order. An event is handed to summarization the moment the next boundary shows
+where it ends, so summaries start while later chunks are still being checked.
+Summaries themselves stay sequential: each one uses the depth and summaries of
+the events before it, so the output is identical to a fully sequential run.
+The job reports two overlapping running stages (`boundaries`, `annotate`);
+`annotate.estimated` is true while its event total is still a guess.
+
+## Dummy inference server
+
+`dev/dummy_inference.py` answers like llama.cpp (and Ollama) without any model
+or API key, with canned deterministic output. Use it to run and test the
+service end to end.
+
+```bash
+DUMMY_LATENCY_MS=150 ml-service/.venv/bin/python ml-service/dev/dummy_inference.py --port 8600
+LLM_BACKEND=llamacpp LLAMACPP_BASE_URL=http://127.0.0.1:8600 \
+  AUTODOCS_INFERENCE_LOCATION=remote AUTODOCS_JOB_DIRECTORY=/path/to/scratch/jobs \
+  ml-service/.venv/bin/uvicorn app:app --app-dir ml-service --port 8501
+```
+
+`GET /stats` reports `maxInFlight`, the highest number of simultaneous
+requests, which shows whether parallelism works. `DUMMY_FAIL_EVERY=N` makes
+every Nth request fail with HTTP 500. `AUTODOCS_INFERENCE_LOCATION=remote` is
+needed because a loopback server otherwise counts as local inference.
+Sample recordings: `last-Iteration/data/model_0/raw/*.cast`. Run the tests with
+`pytest ml-service/tests`.

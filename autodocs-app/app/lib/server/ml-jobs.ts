@@ -6,6 +6,8 @@ export interface MlJobStage {
   status: 'pending' | 'running' | 'completed';
   current: number;
   total: number;
+  /** True while total is a running guess (event count is unknown until all boundaries are found). */
+  estimated: boolean;
   detail: string;
 }
 
@@ -33,6 +35,8 @@ export interface MlJobStatus {
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
+  /** Model requests this job runs at once; 1 for local inference. */
+  parallelRequests: number;
   /** Number of scheduled network retries. */
   retryCount?: number;
   /** UTC timestamp of the next retry, if one is scheduled. */
@@ -54,11 +58,11 @@ function mlUrl(): string {
   return url.replace(/\/$/, '');
 }
 
-export async function enqueueMlJob(input: { id: string; title: string; content: string }): Promise<MlJobStatus> {
+export async function enqueueMlJob(input: { id: string; title: string; content: string; parallelRequests?: number }): Promise<MlJobStatus> {
   const response = await fetch(`${mlUrl()}/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId: input.id, title: input.title, content: input.content }),
+    body: JSON.stringify({ jobId: input.id, title: input.title, content: input.content, parallelRequests: input.parallelRequests }),
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`ML job enqueue failed with status ${response.status}`);

@@ -1,13 +1,12 @@
 """One serialized worker that turns persisted AutoDocs jobs into model results."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import random
 from datetime import datetime, timezone
-import tempfile
-from pathlib import Path
 
 import httpx
 
@@ -15,9 +14,11 @@ from cloudtemple import parse_retry_after_seconds
 import model0
 import model1
 import parser0
-import restructure
+from concurrency import RequestLimiter, effective_concurrency
+from event_stream import EventSplitter
 from job_control import JobControl
 from job_store import JobStore
+from resources import is_local_inference
 
 
 logger = logging.getLogger("ml-service.jobs")
@@ -208,7 +209,8 @@ class JobRunner:
 
     async def _run(self, job_id: str) -> None:
         control = self._control(job_id)
-        if (await self.store.status(job_id))["status"] == "cancelled":
+        state = await self.store.status(job_id)
+        if state["status"] == "cancelled":
             return  # Cancelled in the instant between starting and being tracked.
         content = await self.store.input_content(job_id)
         await self.store.stage(job_id, "parse", 1, "Reading and validating the asciinema recording.")
@@ -216,38 +218,79 @@ class JobRunner:
         await self.store.progress(job_id, "parse", 1, 1, "Terminal recording parsed into model input.")
         await self.store.complete_stage(job_id, "parse", "Terminal recording parsed successfully.")
 
-        total_chunks = len(model0.extract_chunks(flat_xml))
-        await self.store.stage(job_id, "boundaries", total_chunks, f"Checking 0 of {total_chunks} terminal chunks for event boundaries.")
+        chunks = model0.extract_chunks(flat_xml)
+        total_chunks = len(chunks)
+        parallel = effective_concurrency(state.get("requestedConcurrency"))
+        await self.store.set_parallel_requests(job_id, parallel)
+        mode = f" ({parallel} requests in parallel)" if parallel > 1 else ""
+        await self.store.stage(job_id, "boundaries", total_chunks, f"Checking 0 of {total_chunks} terminal chunks for event boundaries{mode}.")
+        await self.store.stage(job_id, "annotate", 0, "Waiting for the first event to be delimited.")
 
-        async def report_boundaries(current: int, total: int, found: int) -> None:
-            await self.store.progress(job_id, "boundaries", current, total, f"Checked {current} of {total} chunks; found {found} event boundaries.")
-            await control.checkpoint()
+        # Boundaries are found in chunk order. As soon as one closes an event,
+        # that event goes to the annotator while later chunks are still checked.
+        events: list[model1.Event] = []
+        predictions: dict[int, dict] = {}
+        ready: asyncio.Queue[model1.Event | None] = asyncio.Queue()
+        progress = {"chunks_done": 0, "boundaries": 0}
+        # Local inference: one request at a time across both models (they share the machine).
+        # A remote API bounds boundary requests by `parallel`; annotation adds one more.
+        limiter = RequestLimiter(1) if is_local_inference() else None
 
-        async with httpx.AsyncClient() as client:
-            boundaries = await model0.find_new_event_timestamps(flat_xml, client, report_boundaries, defer_long_retries=True)
-            await control.checkpoint()
-            await self.store.complete_stage(job_id, "boundaries", f"Detected {len(boundaries)} event boundaries across {total_chunks} chunks.")
+        def expected_events() -> tuple[int, bool]:
+            """Best known number of events, and whether it is final."""
+            if progress["chunks_done"] >= total_chunks:
+                return len(events), True
+            if not events:
+                return 0, False
+            # Extrapolate the event rate seen so far over the chunks left.
+            return max(len(events) + 1, round(len(events) * total_chunks / max(progress["chunks_done"], 1))), False
 
-            await self.store.stage(job_id, "restructure", 1, "Grouping chunks into hierarchical terminal events.")
-            event_xml = restructure.restructure_xml_to_events(flat_xml, boundaries)
-            await self.store.progress(job_id, "restructure", 1, 1, "Terminal chunks grouped into events.")
-            await self.store.complete_stage(job_id, "restructure", "Terminal events are ready for summarization.")
+        async def report_annotations() -> None:
+            total, final = expected_events()
+            label = f"{total}" if final else f"about {total}"
+            await self.store.progress(
+                job_id, "annotate", len(predictions), total,
+                f"Generated {len(predictions)} of {label} event summaries.", estimated=not final,
+            )
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False) as temporary_file:
-                temporary_file.write(event_xml)
-                event_xml_path = temporary_file.name
+        async def find_boundaries(client: httpx.AsyncClient) -> None:
+            splitter = EventSplitter(flat_xml)
+
+            def hand_over(event_xml: str | None) -> None:
+                if event_xml is not None:
+                    event = model1.Event(idx=len(events), xml=event_xml)
+                    events.append(event)
+                    ready.put_nowait(event)
 
             try:
-                events = model1.load_events(event_xml_path)
-                await self.store.stage(job_id, "annotate", len(events), f"Generating 0 of {len(events)} event summaries.")
-
-                async def report_annotations(current: int, total: int, produced: int) -> None:
-                    await self.store.progress(job_id, "annotate", current, total, f"Generated {produced} of {total} event summaries.")
+                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint, defer_long_retries=True, limiter=limiter):
+                    progress["chunks_done"] += 1
+                    progress["boundaries"] += int(is_new)
+                    hand_over(splitter.advance(chunk.ts, is_new))
+                    await self.store.progress(
+                        job_id, "boundaries", progress["chunks_done"], total_chunks,
+                        f"Checked {progress['chunks_done']} of {total_chunks} chunks; found {progress['boundaries']} event boundaries{mode}.",
+                    )
+                    await report_annotations()
                     await control.checkpoint()
-
-                predictions = await model1.annotate_events(events, client, report_annotations, defer_long_retries=True)
+                hand_over(splitter.finish())
             finally:
-                Path(event_xml_path).unlink(missing_ok=True)
+                ready.put_nowait(None)  # Always release the annotator.
+            await self.store.complete_stage(job_id, "boundaries", f"Detected {progress['boundaries']} event boundaries across {total_chunks} chunks.")
+
+        async def annotate_events_as_ready(client: httpx.AsyncClient) -> None:
+            while (event := await ready.get()) is not None:
+                # A pause can arrive while waiting for an event; do not start a request through it.
+                await control.checkpoint()
+                async with limiter.slot(RequestLimiter.SUMMARY_PRIORITY) if limiter is not None else contextlib.nullcontext():
+                    result = await model1.annotate_one(events, event.idx, client, defer_long_retries=True)
+                if result is not None:
+                    predictions[event.idx] = result
+                await report_annotations()
+                await control.checkpoint()
+
+        async with httpx.AsyncClient() as client:
+            await run_together(find_boundaries(client), annotate_events_as_ready(client))
 
         await self.store.complete_stage(job_id, "annotate", f"Generated {len(predictions)} event summaries.")
         await self.store.stage(job_id, "finalize", 1, "Formatting results for the AutoDocs application.")
@@ -265,3 +308,17 @@ class JobRunner:
         await self.store.progress(job_id, "finalize", 1, 1, "Analysis results formatted successfully.")
         await self.store.complete_stage(job_id, "finalize", "Analysis results are ready to save.")
         await self.store.completed(job_id, result)
+
+
+async def run_together(*coroutines) -> None:
+    """Run coroutines side by side; the first failure cancels the others and is raised."""
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in done:
+            task.result()  # Re-raises the first failure.
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

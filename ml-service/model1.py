@@ -321,6 +321,8 @@ async def generate(client: httpx.AsyncClient, instruction: str, *, defer_long_re
                 pool=30.0,
             ),
         ) as resp:
+            if resp.is_error:
+                await resp.aread()  # So the caller can inspect the error body.
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
@@ -374,6 +376,57 @@ async def generate(client: httpx.AsyncClient, instruction: str, *, defer_long_re
 ProgressCallback = Callable[[int, int, int], Awaitable[None]]
 
 
+async def annotate_one(
+    events: List[Event],
+    upto: int,
+    client: httpx.AsyncClient,
+    *,
+    defer_long_retries: bool = False,
+) -> Optional[Dict[str, object]]:
+    """Annotate events[upto], using only events[:upto] as context.
+
+    Returns {"depth", "summary"} (also stored on the event), or None when the
+    model gave no usable answer for an oversized event. Because it reads no
+    event after `upto`, events can be appended while earlier ones are annotated.
+    """
+    success = False
+    invalid_response_seen = False
+    text = ""
+    pkg: Dict = {}
+    retry_options = {"defer_long_retries": True} if defer_long_retries else {}
+
+    for attempt_N in [10, 5, 2, 0]:
+        pkg = make_flush_package(events, upto, N=attempt_N)
+        instr = build_instruction(pkg)
+        try:
+            text = await generate(client, instr, **retry_options)
+            if parse_depth_summary_pairs(text):
+                success = True
+                break
+            invalid_response_seen = True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (400, 413) or "context" in e.response.text.lower():
+                continue
+            raise
+
+    if not success:
+        if invalid_response_seen:
+            raise RuntimeError(
+                f"Model 1 returned no valid annotation JSON for event {upto} "
+                "after all attempts."
+            )
+        text = '{"annotation": "Event payload too large for context window.", "depth": 0}'
+
+    pairs = parse_depth_summary_pairs(text)
+    if not pairs:
+        return None
+    depth, ann = pairs[0]
+    target_idx = pkg["target_idxs"][0]
+    events[target_idx].depth_xml = depth
+    events[target_idx].summary_xml = ann
+    return {"depth": depth, "summary": ann}
+
+
 async def annotate_events(
     events: List[Event],
     client: httpx.AsyncClient,
@@ -384,43 +437,9 @@ async def annotate_events(
     pred: Dict[int, Dict[str, object]] = {}
 
     for upto in range(len(events)):
-        success = False
-        invalid_response_seen = False
-        text = ""
-        pkg: Dict = {}
-
-        for attempt_N in [10, 5, 2, 0]:
-            pkg = make_flush_package(events, upto, N=attempt_N)
-            instr = build_instruction(pkg)
-            try:
-                if defer_long_retries:
-                    text = await generate(client, instr, defer_long_retries=True)
-                else:
-                    text = await generate(client, instr)
-                if parse_depth_summary_pairs(text):
-                    success = True
-                    break
-                invalid_response_seen = True
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code in (400, 413) or "context" in e.response.text.lower():
-                    continue
-                raise
-
-        if not success:
-            if invalid_response_seen:
-                raise RuntimeError(
-                    f"Model 1 returned no valid annotation JSON for event {upto} "
-                    "after all attempts."
-                )
-            text = '{"annotation": "Event payload too large for context window.", "depth": 0}'
-
-        pairs = parse_depth_summary_pairs(text)
-        if pairs:
-            depth, ann = pairs[0]
-            target_idx = pkg["target_idxs"][0]
-            pred[target_idx] = {"depth": depth, "summary": ann}
-            events[target_idx].depth_xml = depth
-            events[target_idx].summary_xml = ann
+        result = await annotate_one(events, upto, client, defer_long_retries=defer_long_retries)
+        if result is not None:
+            pred[upto] = result
 
         if progress_callback:
             await progress_callback(upto + 1, len(events), len(pred))
