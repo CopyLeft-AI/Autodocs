@@ -37,6 +37,12 @@ export interface MlJobStatus {
   startedAt: string | null;
   /** Model requests this job runs at once; 1 for local inference. */
   parallelRequests: number;
+  /** Number of scheduled network retries. */
+  retryCount?: number;
+  /** UTC timestamp of the next retry, if one is scheduled. */
+  nextRetryAt?: string | null;
+  /** Number of recoveries after an interrupted service run. */
+  restartRecoveryCount?: number;
   /** Estimated seconds left; null until enough work has finished to estimate. */
   etaSeconds: number | null;
   resources: MlJobResources | null;

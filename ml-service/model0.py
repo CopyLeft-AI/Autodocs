@@ -15,7 +15,7 @@ from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple
 import httpx
 
 from cloudtemple import chat_completion
-from concurrency import effective_concurrency
+from concurrency import RequestLimiter, effective_concurrency
 from config import StepConfig, load_config
 from xml.etree import ElementTree as ET
 
@@ -145,7 +145,7 @@ def is_new_event(model_result: str) -> bool:
     return "new" in model_result.lower()
 
 
-async def classify_chunk(client: httpx.AsyncClient, prompt: str, step: Optional[StepConfig] = None) -> str:
+async def classify_chunk(client: httpx.AsyncClient, prompt: str, step: Optional[StepConfig] = None, *, defer_long_retries: bool = False) -> str:
     """Ask the configured boundary model whether the target chunk starts an event.
 
     `step` is the boundary step configuration (default: the current config).
@@ -173,6 +173,7 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str, step: Optional[
             base_url=step.base_url,
             api_key=step.api_key,
             max_attempts=step.max_attempts,
+            defer_long_retries=defer_long_retries,
         )
         return result.lower()
 
@@ -201,17 +202,31 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str, step: Optional[
         )
         resp.raise_for_status()
         data = resp.json()
-        if isinstance(data, dict) and "choices" in data:
-            return data["choices"][0]["text"].strip().lower()
-        if isinstance(data, dict) and isinstance(data.get("content"), str):
-            return data["content"].strip().lower()
-        raise RuntimeError(
-            "Unexpected llama.cpp completion response: "
-            + (
-                f"JSON keys={list(data)}"
-                if isinstance(data, dict)
-                else f"JSON type={type(data).__name__}"
+        if isinstance(data, dict):
+            choices = data.get("choices")
+
+            if (
+                isinstance(choices, list)
+                and choices
+                and isinstance(choices[0], dict)
+                and isinstance(choices[0].get("text"), str)
+            ):
+                return choices[0]["text"].strip().lower()
+
+            content = data.get("content")
+            if "choices" not in data and isinstance(content, str):
+                return content.strip().lower()
+
+            details = (
+                f"JSON keys={list(data)}; "
+                f"error={repr(data.get('error'))[:500]}"
             )
+        else:
+            details = f"JSON type={type(data).__name__}"
+
+        raise RuntimeError(
+            f"Unexpected llama.cpp /completions response "
+            f"(HTTP {resp.status_code}): {details}"
         )
 
     if step.backend != "ollama":
@@ -300,6 +315,9 @@ async def stream_boundary_decisions(
     concurrency: int = 1,
     before_request: Optional[Callable[[], Awaitable[None]]] = None,
     step: Optional[StepConfig] = None,
+    *,
+    defer_long_retries: bool = False,
+    limiter: Optional[RequestLimiter] = None,
 ) -> AsyncIterator[Tuple[int, Chunk, bool]]:
     """Yield (index, chunk, is_new_event) in chunk order as decisions arrive.
 
@@ -308,24 +326,49 @@ async def stream_boundary_decisions(
     in parallel while results are still handed out strictly in order. This lets
     the caller start work on the first events before later chunks are decided.
     `before_request` is awaited before each model call (used for pause).
+    `defer_long_retries` lets the provider layer hand long back-offs to the job runner.
+    `limiter` replaces the per-call-site limit of `concurrency`, so a job can share
+    one limit between this stage and another (local inference: one request at a time
+    across both models).
+
+    The first failed request stops everything at once: requests not yet sent are
+    never sent, the ones in flight are cancelled, and the original error is raised
+    without waiting for earlier, slower chunks to finish.
     """
     step = step or load_config().steps["boundaries"]
     plan = plan_decisions(chunks, step)
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    # Passed only when set, so the plain call stays the one callers and tests know.
+    retry_options = {"defer_long_retries": True} if defer_long_retries else {}
+    limiter = limiter or RequestLimiter(concurrency)
+    failed = asyncio.Event()
+    first_error: List[BaseException] = []
 
     async def decide(i: int) -> bool:
         fixed = plan[i]
         if fixed is not None:
             return fixed
-        async with semaphore:  # FIFO: earlier chunks are served first.
-            if before_request:
-                await before_request()
-            return is_new_event(await classify_chunk(client, build_prompt(chunks, i), step))
+        try:
+            async with limiter.slot(RequestLimiter.BOUNDARY_PRIORITY):  # Earlier chunks first.
+                if before_request:
+                    await before_request()
+                return is_new_event(await classify_chunk(client, build_prompt(chunks, i), step, **retry_options))
+        except Exception as error:
+            if not first_error:
+                first_error.append(error)
+                failed.set()  # Wakes the ordered loop at once; its finally block cancels the rest.
+            raise
 
     tasks = [asyncio.create_task(decide(i)) for i in range(len(chunks))]
     try:
         for i, task in enumerate(tasks):
-            yield i, chunks[i], await task
+            watcher = asyncio.create_task(failed.wait())
+            try:
+                await asyncio.wait({task, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                watcher.cancel()
+            if first_error:
+                raise first_error[0]
+            yield i, chunks[i], task.result()
     finally:
         for task in tasks:
             task.cancel()
@@ -338,13 +381,16 @@ async def find_new_event_timestamps(
     progress_callback: Optional[ProgressCallback] = None,
     concurrency: Optional[int] = None,
     step: Optional[StepConfig] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> List[str]:
     config = load_config()
     step = step or config.steps["boundaries"]
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
     async for i, chunk, is_new in stream_boundary_decisions(
-        all_chunks, client, effective_concurrency(concurrency, step, config), step=step
+        all_chunks, client, effective_concurrency(concurrency, step, config), step=step,
+        defer_long_retries=defer_long_retries,
     ):
         if is_new:
             collected_new_events.append(chunk.ts)

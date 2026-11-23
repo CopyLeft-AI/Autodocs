@@ -273,7 +273,7 @@ def parse_depth_summary_pairs(text: str) -> List[Tuple[int, str]]:
     return out
 
 
-async def generate(client: httpx.AsyncClient, instruction: str, step: Optional[StepConfig] = None) -> str:
+async def generate(client: httpx.AsyncClient, instruction: str, step: Optional[StepConfig] = None, *, defer_long_retries: bool = False) -> str:
     """Send one annotation prompt to the configured summary model; return its text."""
     step = step or load_config().steps["annotate"]
 
@@ -287,6 +287,7 @@ async def generate(client: httpx.AsyncClient, instruction: str, step: Optional[S
             base_url=step.base_url,
             api_key=step.api_key,
             max_attempts=step.max_attempts,
+            defer_long_retries=defer_long_retries,
         )
 
     if step.backend == "llamacpp":
@@ -375,6 +376,8 @@ async def annotate_one(
     upto: int,
     client: httpx.AsyncClient,
     step: Optional[StepConfig] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> Optional[Dict[str, object]]:
     """Annotate events[upto], using only events[:upto] as context.
 
@@ -387,12 +390,13 @@ async def annotate_one(
     invalid_response_seen = False
     text = ""
     pkg: Dict = {}
+    retry_options = {"defer_long_retries": True} if defer_long_retries else {}
 
     for attempt_N in [10, 5, 2, 0]:
         pkg = make_flush_package(events, upto, N=attempt_N)
         instr = build_instruction(pkg, step.summary_word_limit)
         try:
-            text = await generate(client, instr, step)
+            text = await generate(client, instr, step, **retry_options)
             if parse_depth_summary_pairs(text):
                 success = True
                 break
@@ -425,12 +429,14 @@ async def annotate_events(
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
     step: Optional[StepConfig] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> Dict[int, Dict[str, object]]:
     step = step or load_config().steps["annotate"]
     pred: Dict[int, Dict[str, object]] = {}
 
     for upto in range(len(events)):
-        result = await annotate_one(events, upto, client, step)
+        result = await annotate_one(events, upto, client, step, defer_long_retries=defer_long_retries)
         if result is not None:
             pred[upto] = result
 
