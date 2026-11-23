@@ -154,7 +154,7 @@ def is_new_event(model_result: str) -> bool:
     return "new" in model_result.lower()
 
 
-async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
+async def classify_chunk(client: httpx.AsyncClient, prompt: str, *, defer_long_retries: bool = False) -> str:
     """Call the local model0 endpoint with the raw (untemplated) prompt.
 
     Uses Ollama's /api/generate with raw=True so the literal
@@ -174,6 +174,7 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
             model=MODEL0_NAME,
             prompt=user_prompt,
             max_tokens=256,
+            defer_long_retries=defer_long_retries,
             timeout_seconds=float(
                 os.getenv("CLOUDTEMPLE_MODEL0_TIMEOUT_SECONDS", "300")
             ),
@@ -317,6 +318,8 @@ async def stream_boundary_decisions(
     client: httpx.AsyncClient,
     concurrency: int = 1,
     before_request: Optional[Callable[[], Awaitable[None]]] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> AsyncIterator[Tuple[int, Chunk, bool]]:
     """Yield (index, chunk, is_new_event) in chunk order as decisions arrive.
 
@@ -325,8 +328,11 @@ async def stream_boundary_decisions(
     in parallel while results are still handed out strictly in order. This lets
     the caller start work on the first events before later chunks are decided.
     `before_request` is awaited before each model call (used for pause).
+    `defer_long_retries` lets the provider layer hand long back-offs to the job runner.
     """
     plan = plan_decisions(chunks)
+    # Passed only when set, so the plain call stays the one callers and tests know.
+    retry_options = {"defer_long_retries": True} if defer_long_retries else {}
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def decide(i: int) -> bool:
@@ -336,7 +342,7 @@ async def stream_boundary_decisions(
         async with semaphore:  # FIFO: earlier chunks are served first.
             if before_request:
                 await before_request()
-            return is_new_event(await classify_chunk(client, build_prompt(chunks, i)))
+            return is_new_event(await classify_chunk(client, build_prompt(chunks, i), **retry_options))
 
     tasks = [asyncio.create_task(decide(i)) for i in range(len(chunks))]
     try:
@@ -353,11 +359,14 @@ async def find_new_event_timestamps(
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
     concurrency: Optional[int] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> List[str]:
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
     async for i, chunk, is_new in stream_boundary_decisions(
-        all_chunks, client, effective_concurrency(concurrency)
+        all_chunks, client, effective_concurrency(concurrency),
+        defer_long_retries=defer_long_retries,
     ):
         if is_new:
             collected_new_events.append(chunk.ts)

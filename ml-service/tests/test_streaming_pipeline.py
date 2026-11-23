@@ -185,17 +185,20 @@ def test_splitter_splits_only_where_told_when_timestamps_repeat():
 
 async def run_job(tmp_path, concurrency, monkeypatch, commands=5):
     order: list[str] = []
+    deferred: list[bool] = []
     store = JobStore(str(tmp_path))
     job_id = str(uuid4())
     await store.create(job_id, "T", cast_text(commands), concurrency)
     assert await store.running(job_id)
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, *, defer_long_retries=False):
+        deferred.append(defer_long_retries)
         await asyncio.sleep(0.01)
         order.append("boundary")
         return is_command_start(prompt)
 
-    async def fake_generate(client, instruction):
+    async def fake_generate(client, instruction, *, defer_long_retries=False):
+        deferred.append(defer_long_retries)
         order.append("annotation")
         index = instruction.split('<target id="')[1].split('"')[0]
         return f'</think>{{"annotation": "Summary {index}", "depth": 0}}'
@@ -206,6 +209,8 @@ async def run_job(tmp_path, concurrency, monkeypatch, commands=5):
     monkeypatch.setattr(model1, "generate", fake_generate)
 
     await JobRunner(store)._run(job_id)
+    # Job runs hand long provider back-offs to the runner (persistent retries).
+    assert deferred and all(deferred)
     return await store.status(job_id), order
 
 

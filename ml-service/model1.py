@@ -283,13 +283,14 @@ def parse_depth_summary_pairs(text: str) -> List[Tuple[int, str]]:
     return out
 
 
-async def generate(client: httpx.AsyncClient, instruction: str) -> str:
+async def generate(client: httpx.AsyncClient, instruction: str, *, defer_long_retries: bool = False) -> str:
     if LLM_BACKEND == "cloudtemple":
         return await chat_completion(
             client,
             model=MODEL1_NAME,
             prompt=instruction,
             max_tokens=MAX_NEW_TOKENS,
+            defer_long_retries=defer_long_retries,
             timeout_seconds=float(
                 os.getenv("CLOUDTEMPLE_MODEL1_TIMEOUT_SECONDS", "600")
             ),
@@ -379,6 +380,8 @@ async def annotate_one(
     events: List[Event],
     upto: int,
     client: httpx.AsyncClient,
+    *,
+    defer_long_retries: bool = False,
 ) -> Optional[Dict[str, object]]:
     """Annotate events[upto], using only events[:upto] as context.
 
@@ -390,12 +393,13 @@ async def annotate_one(
     invalid_response_seen = False
     text = ""
     pkg: Dict = {}
+    retry_options = {"defer_long_retries": True} if defer_long_retries else {}
 
     for attempt_N in [10, 5, 2, 0]:
         pkg = make_flush_package(events, upto, N=attempt_N)
         instr = build_instruction(pkg)
         try:
-            text = await generate(client, instr)
+            text = await generate(client, instr, **retry_options)
             if parse_depth_summary_pairs(text):
                 success = True
                 break
@@ -427,11 +431,13 @@ async def annotate_events(
     events: List[Event],
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> Dict[int, Dict[str, object]]:
     pred: Dict[int, Dict[str, object]] = {}
 
     for upto in range(len(events)):
-        result = await annotate_one(events, upto, client)
+        result = await annotate_one(events, upto, client, defer_long_retries=defer_long_retries)
         if result is not None:
             pred[upto] = result
 
