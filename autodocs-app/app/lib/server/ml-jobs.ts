@@ -52,14 +52,14 @@ export interface MlJobStatus {
   result: { content: string[] } | null;
 }
 
-function mlUrl(): string {
+export function mlServiceUrl(): string {
   const url = process.env.ML_URL;
   if (!url) throw new Error('ML_URL is not set');
   return url.replace(/\/$/, '');
 }
 
 export async function enqueueMlJob(input: { id: string; title: string; content: string; parallelRequests?: number }): Promise<MlJobStatus> {
-  const response = await fetch(`${mlUrl()}/jobs`, {
+  const response = await fetch(`${mlServiceUrl()}/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jobId: input.id, title: input.title, content: input.content, parallelRequests: input.parallelRequests }),
@@ -77,7 +77,7 @@ export class MlJobNotFoundError extends Error {
 }
 
 export async function readMlJob(jobId: string): Promise<MlJobStatus> {
-  const response = await fetch(`${mlUrl()}/jobs/${encodeURIComponent(jobId)}`, {
+  const response = await fetch(`${mlServiceUrl()}/jobs/${encodeURIComponent(jobId)}`, {
     cache: 'no-store',
     signal: AbortSignal.timeout(10_000),
   });
@@ -87,7 +87,7 @@ export async function readMlJob(jobId: string): Promise<MlJobStatus> {
 }
 
 export async function deleteMlJob(jobId: string): Promise<void> {
-  const response = await fetch(`${mlUrl()}/jobs/${encodeURIComponent(jobId)}`, {
+  const response = await fetch(`${mlServiceUrl()}/jobs/${encodeURIComponent(jobId)}`, {
     method: 'DELETE',
     signal: AbortSignal.timeout(10_000),
   });
@@ -105,7 +105,7 @@ export class MlJobConflictError extends Error {
 
 /** Ask the ML service to pause, resume or cancel a job; returns its new state. */
 export async function controlMlJob(jobId: string, action: MlJobControlAction): Promise<MlJobStatus> {
-  const response = await fetch(`${mlUrl()}/jobs/${encodeURIComponent(jobId)}/${action}`, {
+  const response = await fetch(`${mlServiceUrl()}/jobs/${encodeURIComponent(jobId)}/${action}`, {
     method: 'POST',
     signal: AbortSignal.timeout(10_000),
   });
@@ -155,14 +155,14 @@ export class MlConfigRejectedError extends Error {
 }
 
 export async function readMlConfig(): Promise<MlConfig> {
-  const response = await fetch(`${mlUrl()}/config`, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(`${mlServiceUrl()}/config`, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`ML config read failed with status ${response.status}`);
   return response.json() as Promise<MlConfig>;
 }
 
 /** Merge `changes` into the ML service's config file. Omit `apiKey` to keep it; null resets a value. */
 export async function writeMlConfig(changes: unknown): Promise<MlConfig> {
-  const response = await fetch(`${mlUrl()}/config`, {
+  const response = await fetch(`${mlServiceUrl()}/config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(changes),
