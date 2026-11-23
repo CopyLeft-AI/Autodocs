@@ -152,7 +152,7 @@ def is_new_event(model_result: str) -> bool:
     return "new" in model_result.lower()
 
 
-async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
+async def classify_chunk(client: httpx.AsyncClient, prompt: str, *, defer_long_retries: bool = False) -> str:
     """Call the local model0 endpoint with the raw (untemplated) prompt.
 
     Uses Ollama's /api/generate with raw=True so the literal
@@ -172,6 +172,7 @@ async def classify_chunk(client: httpx.AsyncClient, prompt: str) -> str:
             model=MODEL0_NAME,
             prompt=user_prompt,
             max_tokens=256,
+            defer_long_retries=defer_long_retries,
             timeout_seconds=float(
                 os.getenv("CLOUDTEMPLE_MODEL0_TIMEOUT_SECONDS", "300")
             ),
@@ -290,6 +291,8 @@ async def find_new_event_timestamps(
     xml_content: str,
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> List[str]:
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
@@ -311,7 +314,10 @@ async def find_new_event_timestamps(
                 collected_new_events.append(chunk.ts)
         else:
             prompt = build_prompt(all_chunks, i)
-            model_result = await classify_chunk(client, prompt)
+            if defer_long_retries:
+                model_result = await classify_chunk(client, prompt, defer_long_retries=True)
+            else:
+                model_result = await classify_chunk(client, prompt)
             if is_new_event(model_result):
                 collected_new_events.append(chunk.ts)
 

@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 import httpx
 
 
-async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds):
+async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds, defer_long_retries=False):
     api_key = os.getenv("CLOUDTEMPLE_API_KEY", "").strip()
     if not api_key:
         raise ValueError("CLOUDTEMPLE_API_KEY is not configured")
@@ -55,7 +55,7 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds)
 
             retry_after = error.response.headers.get("Retry-After")
             provider_delay = parse_retry_after_seconds(retry_after)
-            if provider_delay is not None and provider_delay > 30.0:
+            if defer_long_retries and provider_delay is not None and provider_delay > 30.0:
                 raise  # Delegate long cooldowns to the persistent scheduler.
 
         except httpx.TransportError:

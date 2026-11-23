@@ -317,6 +317,7 @@ def test_long_retry_after_is_deferred_to_persistent_scheduler(monkeypatch):
                 prompt="Synthetic test prompt",
                 max_tokens=128,
                 timeout_seconds=10,
+                defer_long_retries=True,
             )
 
     with pytest.raises(httpx.HTTPStatusError) as error:
@@ -399,3 +400,94 @@ def test_short_http_date_retry_after_is_respected(monkeypatch):
     assert len(calls) == 2
     assert len(delays) == 1
     assert 18 <= delays[0] <= 21
+
+
+def test_legacy_long_retry_after_retries_internally(monkeypatch):
+    """Without a persistent scheduler, long cooldowns stay in the adapter."""
+    configure(monkeypatch)
+    calls = []
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(cloudtemple.asyncio, "sleep", fake_sleep)
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(
+                503,
+                headers={"Retry-After": "600"},
+                json={"error": "temporary overload"},
+            )
+        return httpx.Response(200, json=SUCCESS)
+
+    async def execute():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            return await cloudtemple.chat_completion(
+                client,
+                model="test-model",
+                prompt="Synthetic test prompt",
+                max_tokens=128,
+                timeout_seconds=10,
+            )
+
+    assert asyncio.run(execute()) == "READY"
+    assert len(calls) == 2
+    assert delays == [600.0]
+
+
+@pytest.mark.parametrize("defer_long_retries", [False, True])
+def test_model0_forwards_retry_mode_to_cloudtemple(monkeypatch, defer_long_retries):
+    import model0
+
+    monkeypatch.setattr(model0, "LLM_BACKEND", "cloudtemple")
+    received = []
+
+    async def fake_completion(client, **kwargs):
+        received.append(kwargs["defer_long_retries"])
+        return "OLD EVENT"
+
+    monkeypatch.setattr(model0, "chat_completion", fake_completion)
+
+    prompt = (
+        "<|im_start|>user<|im_sep|>test"
+        "<|im_end|><|im_start|>assistant<|im_sep|>"
+    )
+
+    async def execute():
+        if defer_long_retries:
+            return await model0.classify_chunk(
+                None, prompt, defer_long_retries=True
+            )
+        return await model0.classify_chunk(None, prompt)
+
+    assert asyncio.run(execute()) == "old event"
+    assert received == [defer_long_retries]
+
+
+@pytest.mark.parametrize("defer_long_retries", [False, True])
+def test_model1_forwards_retry_mode_to_cloudtemple(monkeypatch, defer_long_retries):
+    import model1
+
+    monkeypatch.setattr(model1, "LLM_BACKEND", "cloudtemple")
+    received = []
+
+    async def fake_completion(client, **kwargs):
+        received.append(kwargs["defer_long_retries"])
+        return "READY"
+
+    monkeypatch.setattr(model1, "chat_completion", fake_completion)
+
+    async def execute():
+        if defer_long_retries:
+            return await model1.generate(
+                None, "test", defer_long_retries=True
+            )
+        return await model1.generate(None, "test")
+
+    assert asyncio.run(execute()) == "READY"
+    assert received == [defer_long_retries]

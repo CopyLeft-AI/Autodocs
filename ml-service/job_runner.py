@@ -224,7 +224,7 @@ class JobRunner:
             await control.checkpoint()
 
         async with httpx.AsyncClient() as client:
-            boundaries = await model0.find_new_event_timestamps(flat_xml, client, report_boundaries)
+            boundaries = await model0.find_new_event_timestamps(flat_xml, client, report_boundaries, defer_long_retries=True)
             await control.checkpoint()
             await self.store.complete_stage(job_id, "boundaries", f"Detected {len(boundaries)} event boundaries across {total_chunks} chunks.")
 
@@ -245,7 +245,7 @@ class JobRunner:
                     await self.store.progress(job_id, "annotate", current, total, f"Generated {produced} of {total} event summaries.")
                     await control.checkpoint()
 
-                predictions = await model1.annotate_events(events, client, report_annotations)
+                predictions = await model1.annotate_events(events, client, report_annotations, defer_long_retries=True)
             finally:
                 Path(event_xml_path).unlink(missing_ok=True)
 
