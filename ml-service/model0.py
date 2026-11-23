@@ -17,6 +17,13 @@ import httpx
 from cloudtemple import chat_completion
 from concurrency import RequestLimiter, effective_concurrency
 from config import StepConfig, load_config
+from context_window import (
+    BOUNDARY_ANSWER_TOKENS,
+    boundary_history_enabled,
+    estimate_tokens,
+    history_budget,
+    newest_that_fit,
+)
 from xml.etree import ElementTree as ET
 
 SYSTEM_PROMPT = """Your task is to analyze terminal XML logs and determine whether the timestamp in the TARGET LINE belongs to a "new event" or an "old event".
@@ -112,8 +119,30 @@ def extract_chunks(xml_content: str) -> List[Chunk]:
     return chunks
 
 
-def build_prompt(all_chunks: List[Chunk], i: int) -> str:
-    """Build the exact training/eval prompt string for chunk index i."""
+def history_enabled(step: Optional[StepConfig] = None) -> bool:
+    """Whether boundary decisions see the earlier ones (see context_window)."""
+    step = step or load_config().steps["boundaries"]
+    return boundary_history_enabled(step.backend)
+
+
+def boundary_concurrency(requested: Optional[int] = None, step: Optional[StepConfig] = None, config=None) -> int:
+    """Parallel boundary requests: one while each decision needs the previous."""
+    config = config or load_config()
+    step = step or config.steps["boundaries"]
+    return 1 if history_enabled(step) else effective_concurrency(requested, step, config)
+
+
+def format_decision(chunk: Chunk, is_new: bool) -> str:
+    """One earlier verdict, worded like the model's own answer."""
+    return f"{chunk.ts} {'new event' if is_new else 'old event'}"
+
+
+def build_prompt(all_chunks: List[Chunk], i: int, decisions: Optional[List[bool]] = None) -> str:
+    """Build the exact training/eval prompt string for chunk index i.
+
+    `decisions` (verdicts for chunks 0..i-1, in order) adds a sliding window of
+    earlier verdicts; without it the prompt is the one the model was trained on.
+    """
     start_idx = max(0, i - WINDOW_SIZE + 1)
     window_chunks = all_chunks[start_idx : i + 1]
 
@@ -132,10 +161,18 @@ def build_prompt(all_chunks: List[Chunk], i: int) -> str:
     if len(target_text) > 2000:
         target_text = target_text[:1000] + "\n... [TARGET MIDDLE TRUNCATED] ...\n" + target_text[-1000:]
 
-    input_data = (
-        f"### CONTEXT (Previous Events):\n{context_text}\n\n"
-        f"### TARGET LINE (Extract and Classify THIS Timestamp):\n{target_text}"
-    )
+    input_data = f"### CONTEXT (Previous Events):\n{context_text}\n\n"
+    if decisions:
+        fixed = f"{SYSTEM_PROMPT}\n\n{input_data}### TARGET LINE (Extract and Classify THIS Timestamp):\n{target_text}"
+        earlier = [format_decision(all_chunks[n], verdict) for n, verdict in enumerate(decisions[:i])]
+        window = newest_that_fit(earlier, history_budget(estimate_tokens(fixed), BOUNDARY_ANSWER_TOKENS))
+        if window:
+            input_data += (
+                "### EARLIER DECISIONS (your own answers for the chunks before the target, oldest first; "
+                "use them for consistency, but classify only the TARGET LINE):\n"
+                + "\n".join(window) + "\n\n"
+            )
+    input_data += f"### TARGET LINE (Extract and Classify THIS Timestamp):\n{target_text}"
     combined_user_text = f"{SYSTEM_PROMPT}\n\n{input_data}"
 
     return f"<|im_start|>user<|im_sep|>{combined_user_text}<|im_end|><|im_start|>assistant<|im_sep|>"
@@ -340,6 +377,19 @@ async def stream_boundary_decisions(
     # Passed only when set, so the plain call stays the one callers and tests know.
     retry_options = {"defer_long_retries": True} if defer_long_retries else {}
     limiter = limiter or RequestLimiter(concurrency)
+    if history_enabled(step):
+        # Each verdict is built from the previous ones, so this cannot be parallel.
+        decisions: List[bool] = []
+        for i, chunk in enumerate(chunks):
+            verdict = plan[i]
+            if verdict is None:
+                async with limiter.slot(RequestLimiter.BOUNDARY_PRIORITY):
+                    if before_request:
+                        await before_request()
+                    verdict = is_new_event(await classify_chunk(client, build_prompt(chunks, i, decisions), step, **retry_options))
+            decisions.append(verdict)
+            yield i, chunk, verdict
+        return
     failed = asyncio.Event()
     first_error: List[BaseException] = []
 
@@ -389,7 +439,7 @@ async def find_new_event_timestamps(
     all_chunks = extract_chunks(xml_content)
     collected_new_events: List[str] = []
     async for i, chunk, is_new in stream_boundary_decisions(
-        all_chunks, client, effective_concurrency(concurrency, step, config), step=step,
+        all_chunks, client, boundary_concurrency(concurrency, step, config), step=step,
         defer_long_retries=defer_long_retries,
     ):
         if is_new:

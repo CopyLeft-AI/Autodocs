@@ -225,7 +225,7 @@ class JobRunner:
         # changes a job that is already running.
         config = load_config()
         boundary_step, annotate_step = config.steps["boundaries"], config.steps["annotate"]
-        parallel = effective_concurrency(state.get("requestedConcurrency"), boundary_step, config)
+        parallel = model0.boundary_concurrency(state.get("requestedConcurrency"), boundary_step, config)
         await self.store.set_parallel_requests(job_id, parallel)
         mode = f" ({parallel} requests in parallel)" if parallel > 1 else ""
         await self.store.stage(job_id, "boundaries", total_chunks, f"Checking 0 of {total_chunks} terminal chunks for event boundaries{mode}.")

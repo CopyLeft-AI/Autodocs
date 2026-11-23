@@ -136,12 +136,30 @@ non-loopback Ollama URL).
 
 ## Processing pipeline
 
-Boundary detection classifies each terminal chunk independently, so those
-requests run in parallel (remote API only) while results are consumed in
-order. An event is handed to summarization the moment the next boundary shows
-where it ends, so summaries start while later chunks are still being checked.
-Summaries themselves stay sequential: each one uses the depth and summaries of
-the events before it, so the output is identical to a fully sequential run.
+Both steps see a sliding window of their own earlier answers, so each decision
+can build on how the previous ones were made:
+
+- **Boundaries (Model 0)** get an "EARLIER DECISIONS" section listing the
+  new/old verdict of the chunks before the target. Each verdict depends on the
+  one before it, so while this is on the boundary requests run one at a time.
+  `AUTODOCS_BOUNDARY_HISTORY` is `auto` (default: on for the `cloudtemple` chat
+  backend, off for Ollama/llama.cpp, whose fine-tuned Model 0 was trained
+  without that section), `on` or `off`. With it off, chunks are classified
+  independently, in parallel on a remote API, as before.
+- **Summaries (Model 1)** get a `neighbor_tail` listing the id, depth and
+  summary of the events before the current one, plus the running depth.
+
+The window is the smaller of two sizes: the context buffer
+(`AUTODOCS_CONTEXT_TOKENS`, default 8192; keep it at or below the server's real
+context, e.g. Ollama's `num_ctx`) minus the fixed prompt and the room kept for
+the answer, or everything decided so far. The newest entries are kept. Token
+counts are estimated at 3 characters per token, so the window errs small. If
+the server still reports an overlong prompt, Model 1 retries with a smaller
+window.
+
+An event is handed to summarization the moment the next boundary shows where it
+ends, so summaries start while later chunks are still being checked: the two
+models run at the same time. Summaries themselves stay sequential.
 The job reports two overlapping running stages (`boundaries`, `annotate`);
 `annotate.estimated` is true while its event total is still a guess.
 

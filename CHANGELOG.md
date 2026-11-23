@@ -6,6 +6,7 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- Sliding windows over earlier answers: boundary detection (Model 0) sees its previous new/old verdicts, and annotation (Model 1) sees the id, depth and summary of earlier events. Both windows are sized from the context buffer (`AUTODOCS_CONTEXT_TOKENS`); Model 0's is `AUTODOCS_BOUNDARY_HISTORY` (auto: on for Cloud Temple, off for the fine-tuned local model) and makes boundary requests sequential while on.
 - Single sign-on: administrators enable and configure Google, Microsoft, GitHub, GitLab, Okta, Auth0, Keycloak, Amazon Cognito, LinkedIn, Discord and custom OpenID Connect providers (client ID, write-only encrypted client secret, provider fields, account policy) in a new administrator-only Settings "Single sign-on" tab. Enabled providers get buttons on the login and signup pages. See `autodocs-app/README.md`, "Single sign-on". Apply `autodocs-app/db/init/009_sso.sql` to existing databases; new optional variables `APP_BASE_URL`, `SSO_SECRET_KEY`, `SSO_ALLOW_INSECURE_HTTP`.
 - `npm test` (Bun) with unit tests for the single sign-on code, and the `jose` dependency.
 - Interactive API documentation (Swagger UI): `/api/docs` for the web app's API (a hand-written OpenAPI description served at `/api/openapi.json`, kept in step with the routes by a test) and `/ml-service/docs` for the analysis service, which the app proxies under `/ml-service/*` for administrators only. The ML service's endpoints now have tags and summaries. Closes issue #9.
@@ -34,4 +35,5 @@ All notable changes to this project are documented here, following
 - Failed or cancelled analyses can be deleted from their own panel.
 
 ### Fixed
+- Annotation prompts never contained the earlier events' summaries (they were computed but not inserted); they now do, in the `neighbor_tail` format the few-shot examples already show.
 - The share panel in the session detail view now has a close button.
