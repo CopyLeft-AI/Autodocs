@@ -79,8 +79,11 @@ machine where parallel inference starves each job.
 `AUTODOCS_REMOTE_API_CONCURRENCY` (default `8`, range 1 to 32) is how many
 model requests one job may run in parallel when inference uses a remote API.
 The web app overrides it per user (Settings, "Parallel API requests") through
-the `parallelRequests` field of `POST /jobs`. Local inference (Ollama or
-llama.cpp on this machine) always uses one request at a time. Detection is
+the `parallelRequests` field of `POST /jobs`. Summaries run alongside, so a
+remote job can have that many boundary requests plus one summary request in
+flight. Local inference (Ollama or llama.cpp on this machine) always uses one
+request at a time across both models. A failed request stops the job's other
+requests at once. Detection is
 automatic; set `AUTODOCS_INFERENCE_LOCATION=remote` or `local` to force it.
 
 The job directory stores raw uploaded recordings and status snapshots with
