@@ -10,23 +10,28 @@ from urllib.parse import urlsplit
 import httpx
 
 
-async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds, defer_long_retries=False):
-    api_key = os.getenv("CLOUDTEMPLE_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("CLOUDTEMPLE_API_KEY is not configured")
+async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds, base_url=None, api_key=None, max_attempts=None, defer_long_retries=False):
+    """OpenAI-compatible chat completion with retries.
 
-    base_url = os.getenv(
+    base_url, api_key and max_attempts come from the step configuration; when
+    omitted they fall back to the CLOUDTEMPLE_* environment variables.
+    """
+    api_key = (api_key if api_key is not None else os.getenv("CLOUDTEMPLE_API_KEY", "")).strip()
+    if not api_key:
+        raise ValueError("No API key is configured: set apiKey for this step, or CLOUDTEMPLE_API_KEY")
+
+    base_url = (base_url or os.getenv(
         "CLOUDTEMPLE_BASE_URL",
         "https://api.ai.cloud-temple.com/v1",
-    ).rstrip("/")
+    )).rstrip("/")
 
     parsed_url = urlsplit(base_url)
-    if parsed_url.scheme != "https" or not parsed_url.hostname:
-        raise ValueError("CLOUDTEMPLE_BASE_URL must be a valid HTTPS URL")
+    if parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+        raise ValueError("The API base URL must be a valid http(s) URL")
 
-    max_attempts = int(os.getenv("CLOUDTEMPLE_MAX_ATTEMPTS", "3"))
+    max_attempts = max_attempts or int(os.getenv("CLOUDTEMPLE_MAX_ATTEMPTS", "3"))
     if not 1 <= max_attempts <= 6:
-        raise ValueError("CLOUDTEMPLE_MAX_ATTEMPTS must be between 1 and 6")
+        raise ValueError("max attempts must be between 1 and 6")
 
     for attempt in range(1, max_attempts + 1):
         retry_after = None

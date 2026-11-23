@@ -444,7 +444,7 @@ def test_legacy_long_retry_after_retries_internally(monkeypatch):
 def test_model0_forwards_retry_mode_to_cloudtemple(monkeypatch, defer_long_retries):
     import model0
 
-    monkeypatch.setattr(model0, "LLM_BACKEND", "cloudtemple")
+    monkeypatch.setenv("LLM_BACKEND", "cloudtemple")
     received = []
 
     async def fake_completion(client, **kwargs):
@@ -473,7 +473,7 @@ def test_model0_forwards_retry_mode_to_cloudtemple(monkeypatch, defer_long_retri
 def test_model1_forwards_retry_mode_to_cloudtemple(monkeypatch, defer_long_retries):
     import model1
 
-    monkeypatch.setattr(model1, "LLM_BACKEND", "cloudtemple")
+    monkeypatch.setenv("LLM_BACKEND", "cloudtemple")
     received = []
 
     async def fake_completion(client, **kwargs):

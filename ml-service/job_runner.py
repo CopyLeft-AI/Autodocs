@@ -15,6 +15,7 @@ import model0
 import model1
 import parser0
 from concurrency import RequestLimiter, effective_concurrency
+from config import load_config
 from event_stream import EventSplitter
 from job_control import JobControl
 from job_store import JobStore
@@ -34,7 +35,7 @@ class JobRunner:
 
     def __init__(self, store: JobStore, max_concurrent_jobs: int | None = None) -> None:
         self.store = store
-        self.max_concurrent_jobs = max_concurrent_jobs or int(os.getenv("AUTODOCS_MAX_CONCURRENT_JOBS", "2"))
+        self.max_concurrent_jobs = max_concurrent_jobs or load_config().max_concurrent_jobs
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.worker_tasks: list[asyncio.Task[None]] = []
         self.controls: dict[str, JobControl] = {}
@@ -220,7 +221,11 @@ class JobRunner:
 
         chunks = model0.extract_chunks(flat_xml)
         total_chunks = len(chunks)
-        parallel = effective_concurrency(state.get("requestedConcurrency"))
+        # Settings are read once per job, so editing the configuration never
+        # changes a job that is already running.
+        config = load_config()
+        boundary_step, annotate_step = config.steps["boundaries"], config.steps["annotate"]
+        parallel = effective_concurrency(state.get("requestedConcurrency"), boundary_step, config)
         await self.store.set_parallel_requests(job_id, parallel)
         mode = f" ({parallel} requests in parallel)" if parallel > 1 else ""
         await self.store.stage(job_id, "boundaries", total_chunks, f"Checking 0 of {total_chunks} terminal chunks for event boundaries{mode}.")
@@ -234,7 +239,7 @@ class JobRunner:
         progress = {"chunks_done": 0, "boundaries": 0}
         # Local inference: one request at a time across both models (they share the machine).
         # A remote API bounds boundary requests by `parallel`; annotation adds one more.
-        limiter = RequestLimiter(1) if is_local_inference() else None
+        limiter = RequestLimiter(1) if is_local_inference(config) else None
 
         def expected_events() -> tuple[int, bool]:
             """Best known number of events, and whether it is final."""
@@ -263,7 +268,7 @@ class JobRunner:
                     ready.put_nowait(event)
 
             try:
-                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint, defer_long_retries=True, limiter=limiter):
+                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint, boundary_step, defer_long_retries=True, limiter=limiter):
                     progress["chunks_done"] += 1
                     progress["boundaries"] += int(is_new)
                     hand_over(splitter.advance(chunk.ts, is_new))
@@ -283,7 +288,7 @@ class JobRunner:
                 # A pause can arrive while waiting for an event; do not start a request through it.
                 await control.checkpoint()
                 async with limiter.slot(RequestLimiter.SUMMARY_PRIORITY) if limiter is not None else contextlib.nullcontext():
-                    result = await model1.annotate_one(events, event.idx, client, defer_long_retries=True)
+                    result = await model1.annotate_one(events, event.idx, client, annotate_step, defer_long_retries=True)
                 if result is not None:
                     predictions[event.idx] = result
                 await report_annotations()

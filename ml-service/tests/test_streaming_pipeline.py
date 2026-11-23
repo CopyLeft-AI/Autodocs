@@ -67,7 +67,7 @@ def test_decisions_arrive_in_order_while_requests_overlap(monkeypatch):
     chunks = model0.extract_chunks(parser0.cast_to_xml(cast_text(6), strip_annotations=True))
     in_flight = peak = 0
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None):
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)
@@ -76,7 +76,7 @@ def test_decisions_arrive_in_order_while_requests_overlap(monkeypatch):
         in_flight -= 1
         return is_command_start(prompt)
 
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", fake_classify)
 
     async def collect(concurrency):
@@ -94,7 +94,7 @@ def test_a_failed_request_stops_the_stream_and_cancels_the_rest(monkeypatch):
     chunks = model0.extract_chunks(parser0.cast_to_xml(cast_text(4), strip_annotations=True))
     started = 0
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None):
         nonlocal started
         started += 1
         if started == 2:
@@ -102,7 +102,7 @@ def test_a_failed_request_stops_the_stream_and_cancels_the_rest(monkeypatch):
         await asyncio.sleep(0.05)
         return "old"
 
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", fake_classify)
 
     async def consume():
@@ -121,10 +121,10 @@ def test_before_request_hook_gates_every_model_call(monkeypatch):
         nonlocal gate_calls
         gate_calls += 1
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None):
         return "old"
 
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", fake_classify)
 
     async def consume():
@@ -187,7 +187,7 @@ def test_failure_stops_new_requests_even_when_an_earlier_chunk_is_slow(monkeypat
     chunks = [model0.Chunk(ts=f"{n}.0", text=f'<system_output timestamp="{n}.0">x</system_output>') for n in range(40)]
     started: list[int] = []
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None):
         number = int(prompt.rsplit('timestamp="', 1)[1].split(".")[0])
         started.append(number)
         if number == 0:
@@ -198,7 +198,7 @@ def test_failure_stops_new_requests_even_when_an_earlier_chunk_is_slow(monkeypat
             await asyncio.sleep(0.05)
         return "old"
 
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", fake_classify)
 
     async def consume():
@@ -216,11 +216,11 @@ def test_failure_stops_new_requests_even_when_an_earlier_chunk_is_slow(monkeypat
 def test_external_cancellation_still_cancels_the_stream(monkeypatch):
     chunks = [model0.Chunk(ts=f"{n}.0", text=f'<system_output timestamp="{n}.0">x</system_output>') for n in range(6)]
 
-    async def slow_classify(client, prompt):
+    async def slow_classify(client, prompt, step=None):
         await asyncio.sleep(10)
         return "old"
 
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", slow_classify)
 
     async def consume():
@@ -247,7 +247,7 @@ async def run_job(tmp_path, concurrency, monkeypatch, commands=5, observer=None,
     assert await store.running(job_id)
     runner = JobRunner(store)
 
-    async def fake_classify(client, prompt, *, defer_long_retries=False):
+    async def fake_classify(client, prompt, step=None, *, defer_long_retries=False):
         deferred.append(defer_long_retries)
         if observer:
             observer("boundary:start", runner, job_id, prompt)
@@ -258,7 +258,7 @@ async def run_job(tmp_path, concurrency, monkeypatch, commands=5, observer=None,
             observer("boundary:end", runner, job_id, prompt)
         return is_command_start(prompt)
 
-    async def fake_generate(client, instruction, *, defer_long_retries=False):
+    async def fake_generate(client, instruction, step=None, *, defer_long_retries=False):
         deferred.append(defer_long_retries)
         order.append("annotation")
         if observer:
@@ -270,7 +270,7 @@ async def run_job(tmp_path, concurrency, monkeypatch, commands=5, observer=None,
         return f'</think>{{"annotation": "Summary {index}", "depth": 0}}'
 
     monkeypatch.setenv("AUTODOCS_INFERENCE_LOCATION", location)
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", fake_classify)
     monkeypatch.setattr(model1, "generate", fake_generate)
 

@@ -25,10 +25,10 @@ def sample_xml():
 
 
 def test_cloud_detects_second_command(monkeypatch):
-    monkeypatch.setattr(model0, "LLM_BACKEND", "cloudtemple")
+    monkeypatch.setenv("LLM_BACKEND", "cloudtemple")
     calls = []
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None):
         calls.append(prompt)
         return "old event"
 
@@ -57,10 +57,10 @@ def test_event_grouping_keeps_two_commands_separate():
 
 
 def test_ollama_behavior_unchanged(monkeypatch):
-    monkeypatch.setattr(model0, "LLM_BACKEND", "ollama")
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
     calls = []
 
-    async def fake_classify(client, prompt):
+    async def fake_classify(client, prompt, step=None):
         calls.append(prompt)
         return "old event"
 

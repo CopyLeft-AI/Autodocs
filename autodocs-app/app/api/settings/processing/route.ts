@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRequestUser } from '@/app/lib/server/request-auth';
+import { authorize } from '@/app/lib/server/permissions';
 import {
-  DEFAULT_REMOTE_API_CONCURRENCY,
+  clearRemoteApiConcurrency,
   MAX_REMOTE_API_CONCURRENCY,
   MIN_REMOTE_API_CONCURRENCY,
   readRemoteApiConcurrency,
@@ -11,12 +11,13 @@ import {
 interface ProcessingSettingsBody { remoteApiConcurrency?: unknown; }
 
 function limits() {
-  return { min: MIN_REMOTE_API_CONCURRENCY, max: MAX_REMOTE_API_CONCURRENCY, default: DEFAULT_REMOTE_API_CONCURRENCY };
+  return { min: MIN_REMOTE_API_CONCURRENCY, max: MAX_REMOTE_API_CONCURRENCY };
 }
 
 export async function GET(request: NextRequest) {
-  const user = await getRequestUser(request);
-  if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  const auth = await authorize(request, 'signedIn');
+  if (auth instanceof NextResponse) return auth;
+  const user = auth.user;
   try {
     return NextResponse.json({ remoteApiConcurrency: await readRemoteApiConcurrency(user.id), limits: limits() });
   } catch (error) {
@@ -26,11 +27,16 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const user = await getRequestUser(request);
-  if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  const auth = await authorize(request, 'editSettings');
+  if (auth instanceof NextResponse) return auth;
+  const user = auth.user;
   try {
     const body = (await request.json()) as ProcessingSettingsBody;
     const value = body.remoteApiConcurrency;
+    if (value === null) {
+      await clearRemoteApiConcurrency(user.id);
+      return NextResponse.json({ remoteApiConcurrency: null, limits: limits(), message: 'Settings saved.' });
+    }
     if (typeof value !== 'number' || !Number.isInteger(value) || value < MIN_REMOTE_API_CONCURRENCY || value > MAX_REMOTE_API_CONCURRENCY) {
       return NextResponse.json({ message: `remoteApiConcurrency must be a whole number from ${MIN_REMOTE_API_CONCURRENCY} to ${MAX_REMOTE_API_CONCURRENCY}.` }, { status: 400 });
     }
