@@ -81,7 +81,9 @@ class JobStore:
             state = self._load(job_id)
             if state["status"] != "queued":
                 return False
-            state.update(status="running", startedAt=self._now(), nextRetryAt=None, pausedAt=None, pausedSeconds=0.0)
+            # Current stage list and zero progress: a job queued before an upgrade may carry
+            # stages the runner no longer completes (and a retried job starts over anyway).
+            state.update(status="running", startedAt=self._now(), nextRetryAt=None, pausedAt=None, pausedSeconds=0.0, percent=0, stages=self._stages())
             self._append_event(state, "started", "Inference worker started.")
             self._touch(state)
             self._write_json(self._state_path(job_id), state)

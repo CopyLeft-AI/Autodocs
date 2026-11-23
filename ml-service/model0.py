@@ -16,7 +16,7 @@ from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple
 import httpx
 
 from cloudtemple import chat_completion
-from concurrency import effective_concurrency
+from concurrency import RequestLimiter, effective_concurrency
 from xml.etree import ElementTree as ET
 
 SYSTEM_PROMPT = """Your task is to analyze terminal XML logs and determine whether the timestamp in the TARGET LINE belongs to a "new event" or an "old event".
@@ -320,6 +320,7 @@ async def stream_boundary_decisions(
     before_request: Optional[Callable[[], Awaitable[None]]] = None,
     *,
     defer_long_retries: bool = False,
+    limiter: Optional[RequestLimiter] = None,
 ) -> AsyncIterator[Tuple[int, Chunk, bool]]:
     """Yield (index, chunk, is_new_event) in chunk order as decisions arrive.
 
@@ -329,25 +330,47 @@ async def stream_boundary_decisions(
     the caller start work on the first events before later chunks are decided.
     `before_request` is awaited before each model call (used for pause).
     `defer_long_retries` lets the provider layer hand long back-offs to the job runner.
+    `limiter` replaces the per-call-site limit of `concurrency`, so a job can share
+    one limit between this stage and another (local inference: one request at a time
+    across both models).
+
+    The first failed request stops everything at once: requests not yet sent are
+    never sent, the ones in flight are cancelled, and the original error is raised
+    without waiting for earlier, slower chunks to finish.
     """
     plan = plan_decisions(chunks)
     # Passed only when set, so the plain call stays the one callers and tests know.
     retry_options = {"defer_long_retries": True} if defer_long_retries else {}
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    limiter = limiter or RequestLimiter(concurrency)
+    failed = asyncio.Event()
+    first_error: List[BaseException] = []
 
     async def decide(i: int) -> bool:
         fixed = plan[i]
         if fixed is not None:
             return fixed
-        async with semaphore:  # FIFO: earlier chunks are served first.
-            if before_request:
-                await before_request()
-            return is_new_event(await classify_chunk(client, build_prompt(chunks, i), **retry_options))
+        try:
+            async with limiter.slot(RequestLimiter.BOUNDARY_PRIORITY):  # Earlier chunks first.
+                if before_request:
+                    await before_request()
+                return is_new_event(await classify_chunk(client, build_prompt(chunks, i), **retry_options))
+        except Exception as error:
+            if not first_error:
+                first_error.append(error)
+                failed.set()  # Wakes the ordered loop at once; its finally block cancels the rest.
+            raise
 
     tasks = [asyncio.create_task(decide(i)) for i in range(len(chunks))]
     try:
         for i, task in enumerate(tasks):
-            yield i, chunks[i], await task
+            watcher = asyncio.create_task(failed.wait())
+            try:
+                await asyncio.wait({task, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                watcher.cancel()
+            if first_error:
+                raise first_error[0]
+            yield i, chunks[i], task.result()
     finally:
         for task in tasks:
             task.cancel()

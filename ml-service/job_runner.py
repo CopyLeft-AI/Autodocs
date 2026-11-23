@@ -1,6 +1,7 @@
 """One serialized worker that turns persisted AutoDocs jobs into model results."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -13,10 +14,11 @@ from cloudtemple import parse_retry_after_seconds
 import model0
 import model1
 import parser0
-from concurrency import effective_concurrency
+from concurrency import RequestLimiter, effective_concurrency
 from event_stream import EventSplitter
 from job_control import JobControl
 from job_store import JobStore
+from resources import is_local_inference
 
 
 logger = logging.getLogger("ml-service.jobs")
@@ -230,6 +232,9 @@ class JobRunner:
         predictions: dict[int, dict] = {}
         ready: asyncio.Queue[model1.Event | None] = asyncio.Queue()
         progress = {"chunks_done": 0, "boundaries": 0}
+        # Local inference: one request at a time across both models (they share the machine).
+        # A remote API bounds boundary requests by `parallel`; annotation adds one more.
+        limiter = RequestLimiter(1) if is_local_inference() else None
 
         def expected_events() -> tuple[int, bool]:
             """Best known number of events, and whether it is final."""
@@ -258,7 +263,7 @@ class JobRunner:
                     ready.put_nowait(event)
 
             try:
-                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint, defer_long_retries=True):
+                async for _, chunk, is_new in model0.stream_boundary_decisions(chunks, client, parallel, control.checkpoint, defer_long_retries=True, limiter=limiter):
                     progress["chunks_done"] += 1
                     progress["boundaries"] += int(is_new)
                     hand_over(splitter.advance(chunk.ts, is_new))
@@ -275,7 +280,10 @@ class JobRunner:
 
         async def annotate_events_as_ready(client: httpx.AsyncClient) -> None:
             while (event := await ready.get()) is not None:
-                result = await model1.annotate_one(events, event.idx, client, defer_long_retries=True)
+                # A pause can arrive while waiting for an event; do not start a request through it.
+                await control.checkpoint()
+                async with limiter.slot(RequestLimiter.SUMMARY_PRIORITY) if limiter is not None else contextlib.nullcontext():
+                    result = await model1.annotate_one(events, event.idx, client, defer_long_retries=True)
                 if result is not None:
                     predictions[event.idx] = result
                 await report_annotations()
