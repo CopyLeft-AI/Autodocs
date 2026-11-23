@@ -283,13 +283,14 @@ def parse_depth_summary_pairs(text: str) -> List[Tuple[int, str]]:
     return out
 
 
-async def generate(client: httpx.AsyncClient, instruction: str) -> str:
+async def generate(client: httpx.AsyncClient, instruction: str, *, defer_long_retries: bool = False) -> str:
     if LLM_BACKEND == "cloudtemple":
         return await chat_completion(
             client,
             model=MODEL1_NAME,
             prompt=instruction,
             max_tokens=MAX_NEW_TOKENS,
+            defer_long_retries=defer_long_retries,
             timeout_seconds=float(
                 os.getenv("CLOUDTEMPLE_MODEL1_TIMEOUT_SECONDS", "600")
             ),
@@ -377,6 +378,8 @@ async def annotate_events(
     events: List[Event],
     client: httpx.AsyncClient,
     progress_callback: Optional[ProgressCallback] = None,
+    *,
+    defer_long_retries: bool = False,
 ) -> Dict[int, Dict[str, object]]:
     pred: Dict[int, Dict[str, object]] = {}
 
@@ -390,7 +393,10 @@ async def annotate_events(
             pkg = make_flush_package(events, upto, N=attempt_N)
             instr = build_instruction(pkg)
             try:
-                text = await generate(client, instr)
+                if defer_long_retries:
+                    text = await generate(client, instr, defer_long_retries=True)
+                else:
+                    text = await generate(client, instr)
                 if parse_depth_summary_pairs(text):
                     success = True
                     break

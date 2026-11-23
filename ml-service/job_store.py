@@ -82,18 +82,22 @@ class JobStore:
             state = self._load(job_id)
             if state["status"] != "queued":
                 return False
-            state.update(status="running", startedAt=self._now())
+            state.update(status="running", startedAt=self._now(), nextRetryAt=None, pausedAt=None, pausedSeconds=0.0)
             self._append_event(state, "started", "Inference worker started.")
             self._touch(state)
             self._write_json(self._state_path(job_id), state)
             return True
 
     async def pause(self, job_id: str) -> dict[str, Any]:
-        """Mark a running job paused; the runner halts at its next checkpoint."""
+        """Pause a running job or a queued network retry."""
         async with self._lock:
             state = self._load(job_id)
-            if state["status"] != "running":
-                raise ValueError("Only running jobs can be paused.")
+            if state["status"] != "running" and not (
+                state["status"] == "queued" and state.get("nextRetryAt")
+            ):
+                raise ValueError(
+                    "Only running jobs or scheduled network retries can be paused."
+                )
             state.update(status="paused", pausedAt=self._now())
             self._append_event(state, "paused", "Analysis paused; it will stop after the current step finishes.")
             self._touch(state)
@@ -107,7 +111,7 @@ class JobStore:
             if state["status"] != "paused":
                 raise ValueError("Only paused jobs can be resumed.")
             self._bank_paused_time(state)
-            state["status"] = "running"
+            state["status"] = "queued" if state.get("nextRetryAt") else "running"
             self._append_event(state, "resumed", "Analysis resumed.")
             self._touch(state)
             self._write_json(self._state_path(job_id), state)
@@ -176,6 +180,49 @@ class JobStore:
     async def failed(self, job_id: str, message: str) -> None:
         await self._mutate(job_id, status="failed", error=message, message=message, kind="failed", unless_cancelled=True)
 
+    async def defer_network_retry(
+        self, job_id: str, attempt: int, delay_seconds: float
+    ) -> bool:
+        """Persist a delayed retry without losing the original input."""
+        from datetime import timedelta
+        import math
+
+        if attempt < 1 or not math.isfinite(delay_seconds) or delay_seconds < 0:
+            raise ValueError("Invalid network retry parameters")
+
+        async with self._lock:
+            state = self._load(job_id)
+
+            # Cancellation and other state changes take precedence.
+            if state["status"] not in ("running", "paused"):
+                return False
+            was_paused = state["status"] == "paused"
+
+            try:
+                deadline = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            except OverflowError:
+                # Keep an unrepresentably distant cooldown persisted.
+                deadline = datetime.max.replace(tzinfo=timezone.utc)
+            next_retry_at = deadline.isoformat()
+
+            state.update(
+                status="paused" if was_paused else "queued",
+                percent=0,
+                stages=self._stages(),
+                startedAt=None,
+                error=None,
+                retryCount=attempt,
+                nextRetryAt=next_retry_at,
+            )
+            self._append_event(
+                state,
+                "retry",
+                f"Temporary network failure; retry {attempt} scheduled.",
+            )
+            self._touch(state)
+            self._write_json(self._state_path(job_id), state)
+            return True
+
     async def delete_inactive(self, job_id: str) -> None:
         """Remove a failed or cancelled job and its uploaded recording."""
         async with self._lock:
@@ -192,7 +239,44 @@ class JobStore:
                 state = json.loads(path.read_text())
                 if state["status"] == "queued":
                     queued.append(state["id"])
-                elif state["status"] in ("running", "paused"):
+                elif state["status"] == "running":
+                    recoveries = int(state.get("restartRecoveryCount", 0))
+                    if recoveries < 3:
+                        state.update(
+                            status="queued",
+                            percent=0,
+                            stages=self._stages(),
+                            startedAt=None,
+                            pausedAt=None,
+                            pausedSeconds=0.0,
+                            nextRetryAt=None,
+                            error=None,
+                            result=None,
+                            restartRecoveryCount=recoveries + 1,
+                        )
+                        self._append_event(
+                            state,
+                            "recovered",
+                            "Inference service restarted; analysis queued "
+                            "again from its saved input.",
+                        )
+                        self._touch(state)
+                        self._write_json(path, state)
+                        queued.append(state["id"])
+                    else:
+                        state["status"] = "failed"
+                        state["error"] = (
+                            "Analysis interrupted by repeated service "
+                            "restarts; automatic recovery limit reached."
+                        )
+                        self._append_event(
+                            state, "failed", state["error"]
+                        )
+                        self._touch(state)
+                        self._write_json(path, state)
+                elif state["status"] == "paused" and state.get("nextRetryAt"):
+                    continue
+                elif state["status"] == "paused":
                     state["status"] = "failed"
                     state["error"] = "The inference service restarted before this job finished. Upload again to retry."
                     self._append_event(state, "failed", state["error"])

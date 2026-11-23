@@ -30,10 +30,12 @@ def test_completed_job_preserves_event_xml():
         async def __aenter__(self): return self
         async def __aexit__(self, *args): return False
 
-    async def boundaries(*args):
+    async def boundaries(*args, defer_long_retries=False):
+        assert defer_long_retries is True
         return []
 
-    async def annotate(events, client, callback):
+    async def annotate(events, client, callback, *, defer_long_retries=False):
+        assert defer_long_retries is True
         return {0: {'depth': -1, 'summary': 'Run command'}}
 
     def fake_module(name, **attributes):
