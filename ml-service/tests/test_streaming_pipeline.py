@@ -183,29 +183,100 @@ def test_splitter_splits_only_where_told_when_timestamps_repeat():
 
 # --- the streamed job pipeline ----------------------------------------------
 
-async def run_job(tmp_path, concurrency, monkeypatch, commands=5):
+def test_failure_stops_new_requests_even_when_an_earlier_chunk_is_slow(monkeypatch):
+    chunks = [model0.Chunk(ts=f"{n}.0", text=f'<system_output timestamp="{n}.0">x</system_output>') for n in range(40)]
+    started: list[int] = []
+
+    async def fake_classify(client, prompt, step=None):
+        number = int(prompt.rsplit('timestamp="', 1)[1].split(".")[0])
+        started.append(number)
+        if number == 0:
+            await asyncio.sleep(1.0)  # The first chunk is slow...
+        elif number == 3:
+            raise RuntimeError("provider 500")  # ...and a later one fails at once.
+        else:
+            await asyncio.sleep(0.05)
+        return "old"
+
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
+    monkeypatch.setattr(model0, "classify_chunk", fake_classify)
+
+    async def consume():
+        started_at = asyncio.get_running_loop().time()
+        with pytest.raises(RuntimeError, match="provider 500"):
+            async for _ in model0.stream_boundary_decisions(chunks, None, 4):
+                pass
+        return asyncio.get_running_loop().time() - started_at
+
+    elapsed = asyncio.run(consume())
+    assert len(started) < 10  # Not all 40 requests are sent after the failure.
+    assert elapsed < 0.5  # The error does not wait for the slow first chunk.
+
+
+def test_external_cancellation_still_cancels_the_stream(monkeypatch):
+    chunks = [model0.Chunk(ts=f"{n}.0", text=f'<system_output timestamp="{n}.0">x</system_output>') for n in range(6)]
+
+    async def slow_classify(client, prompt, step=None):
+        await asyncio.sleep(10)
+        return "old"
+
+    monkeypatch.setenv("LLM_BACKEND", "ollama")
+    monkeypatch.setattr(model0, "classify_chunk", slow_classify)
+
+    async def consume():
+        task = asyncio.create_task(_drain(chunks))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    async def _drain(items):
+        async for _ in model0.stream_boundary_decisions(items, None, 2):
+            pass
+
+    asyncio.run(consume())
+
+
+async def run_job(tmp_path, concurrency, monkeypatch, commands=5, observer=None, location="remote", slow_first_input=False):
+    """Run a whole job with fake models. `observer(event, runner, job_id)` sees each model call."""
     order: list[str] = []
+    deferred: list[bool] = []
     store = JobStore(str(tmp_path))
     job_id = str(uuid4())
     await store.create(job_id, "T", cast_text(commands), concurrency)
     assert await store.running(job_id)
+    runner = JobRunner(store)
 
-    async def fake_classify(client, prompt, step=None):
-        await asyncio.sleep(0.01)
+    async def fake_classify(client, prompt, step=None, *, defer_long_retries=False):
+        deferred.append(defer_long_retries)
+        if observer:
+            observer("boundary:start", runner, job_id, prompt)
+        # The request for the first command's input (it closes the first event) is slow.
+        await asyncio.sleep(0.3 if slow_first_input and 'timestamp="0.1"' in prompt.rpartition("### TARGET LINE")[2] else 0.01)
         order.append("boundary")
+        if observer:
+            observer("boundary:end", runner, job_id, prompt)
         return is_command_start(prompt)
 
-    async def fake_generate(client, instruction, step=None):
+    async def fake_generate(client, instruction, step=None, *, defer_long_retries=False):
+        deferred.append(defer_long_retries)
         order.append("annotation")
+        if observer:
+            observer("annotation:start", runner, job_id, instruction)
+        await asyncio.sleep(0.01)
+        if observer:
+            observer("annotation:end", runner, job_id, instruction)
         index = instruction.split('<target id="')[1].split('"')[0]
         return f'</think>{{"annotation": "Summary {index}", "depth": 0}}'
 
-    monkeypatch.setenv("AUTODOCS_INFERENCE_LOCATION", "remote")
+    monkeypatch.setenv("AUTODOCS_INFERENCE_LOCATION", location)
     monkeypatch.setenv("LLM_BACKEND", "ollama")
     monkeypatch.setattr(model0, "classify_chunk", fake_classify)
     monkeypatch.setattr(model1, "generate", fake_generate)
 
-    await JobRunner(store)._run(job_id)
+    await runner._run(job_id)
+    # Job runs hand long provider back-offs to the runner (persistent retries).
+    assert deferred and all(deferred)
     return await store.status(job_id), order
 
 
@@ -267,3 +338,95 @@ def test_run_together_cancels_the_sibling_on_failure():
     with pytest.raises(ValueError):
         asyncio.run(run_together(sibling(), failing()))
     assert cancelled
+
+
+def test_local_inference_never_overlaps_the_two_models(tmp_path, monkeypatch):
+    in_flight = {"now": 0, "max": 0}
+
+    def observe(event, runner, job_id, detail=""):
+        in_flight["now"] += 1 if event.endswith(":start") else -1
+        in_flight["max"] = max(in_flight["max"], in_flight["now"])
+
+    state, order = asyncio.run(run_job(tmp_path, 8, monkeypatch, observer=observe, location="local"))
+    assert state["status"] == "completed"
+    assert in_flight["max"] == 1  # One request at a time across boundaries and summaries.
+    # Summaries are not starved by the boundary requests already waiting.
+    assert order.index("annotation") < len(order) - 1 - order[::-1].index("boundary")
+
+
+def test_remote_inference_lets_summaries_overlap_boundary_requests(tmp_path, monkeypatch):
+    in_flight = {"now": 0, "max": 0}
+
+    def observe(event, runner, job_id, detail=""):
+        in_flight["now"] += 1 if event.endswith(":start") else -1
+        in_flight["max"] = max(in_flight["max"], in_flight["now"])
+
+    asyncio.run(run_job(tmp_path, 2, monkeypatch, observer=observe))
+    assert 2 < in_flight["max"] <= 3  # N boundary requests plus one summary.
+
+
+def test_pause_stops_the_annotator_from_starting_a_request(tmp_path, monkeypatch):
+    paused_calls: list[str] = []
+
+    def observe(event, runner, job_id, detail=""):
+        control = runner._control(job_id)
+        loop = asyncio.get_running_loop()
+        if event == "boundary:start" and 'timestamp="0.1"' in detail.rpartition("### TARGET LINE")[2]:
+            # The slow request that closes the first event is in flight: pause, resume later.
+            loop.call_later(0.1, control.pause)
+            loop.call_later(0.6, control.resume)
+        if event == "annotation:start" and not control._running.is_set():
+            paused_calls.append(event)  # No summary may start through the pause.
+
+    result, _ = asyncio.run(run_job(tmp_path, 4, monkeypatch, observer=observe, slow_first_input=True))
+    assert result["status"] == "completed"
+    assert paused_calls == []
+
+
+def test_a_job_queued_before_an_upgrade_starts_with_the_current_stages(tmp_path):
+    async def scenario():
+        store = JobStore(str(tmp_path))
+        job_id = str(uuid4())
+        await store.create(job_id, "T", cast_text(1), None)
+        path = store._state_path(job_id)
+        state = json.loads(path.read_text())
+        # What an older version wrote: a "restructure" stage and some progress.
+        state["stages"] = [{"id": "parse"}, {"id": "boundaries"}, {"id": "restructure"}, {"id": "annotate"}, {"id": "finalize"}]
+        state["percent"] = 40
+        path.write_text(json.dumps(state))
+        assert await store.running(job_id)
+        return await store.status(job_id)
+
+    state = asyncio.run(scenario())
+    assert [stage["id"] for stage in state["stages"]] == [stage["id"] for stage in JobStore._stages()]
+    assert "restructure" not in [stage["id"] for stage in state["stages"]]
+    assert state["percent"] == 0
+
+
+def test_request_limiter_serves_urgent_callers_first_and_survives_cancellation():
+    from concurrency import RequestLimiter
+
+    async def scenario():
+        limiter = RequestLimiter(1)
+        served: list[str] = []
+
+        async def use(name: str, priority: int):
+            async with limiter.slot(priority):
+                served.append(name)
+                await asyncio.sleep(0.01)
+
+        async with limiter.slot(1):  # Hold the only slot while others queue up.
+            tasks = [
+                asyncio.create_task(use("boundary-1", 1)),
+                asyncio.create_task(use("boundary-2", 1)),
+                asyncio.create_task(use("summary", 0)),
+                asyncio.create_task(use("cancelled", 0)),
+            ]
+            await asyncio.sleep(0.01)
+            tasks[3].cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        async with limiter.slot(1):  # The slot is free again (nothing leaked).
+            served.append("after")
+        return served
+
+    assert asyncio.run(scenario()) == ["summary", "boundary-1", "boundary-2", "after"]

@@ -3,12 +3,14 @@
 import asyncio
 import math
 import os
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import httpx
 
 
-async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds, base_url=None, api_key=None, max_attempts=None):
+async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds, base_url=None, api_key=None, max_attempts=None, defer_long_retries=False):
     """OpenAI-compatible chat completion with retries.
 
     base_url, api_key and max_attempts come from the step configuration; when
@@ -57,6 +59,9 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds,
                 raise
 
             retry_after = error.response.headers.get("Retry-After")
+            provider_delay = parse_retry_after_seconds(retry_after)
+            if defer_long_retries and provider_delay is not None and provider_delay > 30.0:
+                raise  # Delegate long cooldowns to the persistent scheduler.
 
         except httpx.TransportError:
             if attempt == max_attempts:
@@ -97,13 +102,39 @@ async def chat_completion(client, *, model, prompt, max_tokens, timeout_seconds,
         delay = min(30.0, 2.0 ** attempt)
 
         if retry_after is not None:
-            try:
-                requested_delay = float(retry_after)
-                if math.isfinite(requested_delay) and requested_delay >= 0:
-                    delay = min(30.0, requested_delay)
-            except ValueError:
-                pass
+            requested_delay = parse_retry_after_seconds(retry_after)
+            if requested_delay is not None:
+                delay = max(delay, requested_delay)
 
         await asyncio.sleep(delay)
 
     raise RuntimeError("Cloud Temple exhausted retry attempts")
+
+
+def parse_retry_after_seconds(value: str | None) -> float | None:
+    """Parse Retry-After seconds or an HTTP-date as a minimum cooldown."""
+    if value is None:
+        return None
+
+    value = value.strip()
+    if not value:
+        return None
+
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            deadline = parsedate_to_datetime(value)
+            if deadline.tzinfo is None:
+                return None
+            seconds = max(
+                0.0,
+                (deadline - datetime.now(timezone.utc)).total_seconds(),
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+
+    return seconds

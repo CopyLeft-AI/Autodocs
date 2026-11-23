@@ -19,7 +19,10 @@ function headline(job: MlJobStatus): string {
         case 'cancelled': return 'Analysis cancelled';
         case 'completed': return 'Analysis complete';
         case 'paused': return 'Analysis paused';
-        case 'queued': return 'Analysis queued';
+        case 'queued':
+            return job.nextRetryAt
+                ? 'Analysis retry scheduled'
+                : 'Analysis queued';
         default: return 'Analysis in progress';
     }
 }
@@ -27,6 +30,23 @@ function headline(job: MlJobStatus): string {
 function subline(job: MlJobStatus): string {
     if (job.status === 'failed') return job.error ?? 'The analysis failed.';
     if (job.status === 'cancelled') return 'Stopped before it finished. Nothing was saved.';
+    if (job.status === 'paused' && job.nextRetryAt) {
+        return 'Connection retry paused. Resume to continue automatically.';
+    }
+    if (job.status === 'queued' && job.nextRetryAt) {
+        const remaining = Math.ceil(
+            (Date.parse(job.nextRetryAt) - Date.now()) / 1000
+        );
+        const retry = job.retryCount ?? 1;
+
+        if (!Number.isFinite(remaining)) {
+            return 'Connection temporarily unavailable. Automatic retry scheduled.';
+        }
+        if (remaining > 0) {
+            return `Connection temporarily unavailable · retry ${retry} in ${formatSeconds(remaining)}.`;
+        }
+        return `Connection temporarily unavailable · retry ${retry} waiting for a worker.`;
+    }
     if (job.status === 'queued') return 'Waiting for a free inference worker.';
     const eta = job.status === 'running' ? formatEta(job.etaSeconds) : null;
     return [`${job.title}`, `${elapsed(job)} since upload`, `${job.percent}% complete`, eta].filter(Boolean).join(' · ');
@@ -73,6 +93,7 @@ export function UploadProgressPanel({ job, isBusy, onControl, onDelete, onDismis
     const complete = job.status === 'completed';
     const paused = job.status === 'paused';
     const isActive = job.status === 'queued' || job.status === 'running' || paused;
+    const canPause = job.status === 'running' || (job.status === 'queued' && Boolean(job.nextRetryAt));
     const barColor = failed ? 'bg-destructive' : complete ? 'bg-emerald-400' : cancelled || paused ? 'bg-muted-foreground' : 'bg-primary';
     const border = failed ? 'border-destructive/40 bg-destructive/5'
         : complete ? 'border-emerald-500/40 bg-emerald-500/5'
@@ -99,7 +120,7 @@ export function UploadProgressPanel({ job, isBusy, onControl, onDelete, onDismis
             </div>
 
             <div className="flex flex-wrap items-center gap-2 mb-4">
-                {job.status === 'running' && <ControlButton label="Pause" icon={<IconPlayerPause size={14} />} disabled={isBusy} onClick={() => onControl('pause')} />}
+                {canPause && <ControlButton label="Pause" icon={<IconPlayerPause size={14} />} disabled={isBusy} onClick={() => onControl('pause')} />}
                 {paused && <ControlButton label="Resume" icon={<IconPlayerPlay size={14} />} disabled={isBusy} onClick={() => onControl('resume')} />}
                 {isActive && (
                     <ControlButton

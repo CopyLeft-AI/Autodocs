@@ -79,8 +79,11 @@ machine where parallel inference starves each job.
 `AUTODOCS_REMOTE_API_CONCURRENCY` (default `8`, range 1 to 32) is how many
 model requests one job may run in parallel when inference uses a remote API.
 The web app overrides it per user (Settings, "Parallel API requests") through
-the `parallelRequests` field of `POST /jobs`. Local inference (Ollama or
-llama.cpp on this machine) always uses one request at a time. Detection is
+the `parallelRequests` field of `POST /jobs`. Summaries run alongside, so a
+remote job can have that many boundary requests plus one summary request in
+flight. Local inference (Ollama or llama.cpp on this machine) always uses one
+request at a time across both models. A failed request stops the job's other
+requests at once. Detection is
 automatic; set `AUTODOCS_INFERENCE_LOCATION=remote` or `local` to force it.
 
 The job directory stores raw uploaded recordings and status snapshots with
@@ -100,6 +103,13 @@ AUTODOCS_PROCESSING_MODE="local-cpu-jobs"
 Apply `autodocs-app/db/init/004_processing_jobs.sql` to existing Postgres
 databases before enabling this mode. See the [web app README](../autodocs-app/README.md#local-cpu-inference-option)
 for the full migration and behavior notes.
+
+## API documentation
+
+FastAPI generates the OpenAPI description and a Swagger page: open `http://127.0.0.1:8500/docs`
+(raw description at `/openapi.json`) when you run the service directly. In a deployment the web app shows
+the same page at `/ml-service/docs` to administrators and proxies the calls, so the service does not need
+to be reachable from browsers.
 
 ## Compatibility
 
