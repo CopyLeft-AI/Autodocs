@@ -4,6 +4,7 @@ import { AUTH_PATHS } from './paths-auth';
 import { SESSION_PATHS } from './paths-sessions';
 import { SETTINGS_PATHS } from './paths-settings';
 import { SCHEMAS } from './schemas';
+import { SSO_PATHS } from './paths-sso';
 import type { OpenApiDocument, OpenApiPaths } from './types';
 
 /** The description of this document itself, so it is visible in the list. */
@@ -35,13 +36,15 @@ export const OPENAPI_DOCUMENT: OpenApiDocument = {
   servers: [{ url: '/' }],
   tags: [
     { name: 'Account', description: 'Sign-up, sign-in and the signed-in user.' },
+    { name: 'Single sign-on', description: 'Sign-in through identity providers.' },
     { name: 'Settings', description: 'Inference and processing settings.' },
     { name: 'Users and groups (administrators)', description: 'Rights management. Requires the administrator right.' },
     { name: 'Terminal sessions', description: 'Stored analyses and sharing.' },
     { name: 'Analysis jobs', description: 'Background analysis of an uploaded recording.' },
+    { name: 'Annotations', description: 'Timelines and annotations of a recording, with their history.' },
     { name: 'Documentation', description: 'This description.' },
   ],
-  paths: { ...AUTH_PATHS, ...SETTINGS_PATHS, ...ADMIN_PATHS, ...SESSION_PATHS, ...SPEC_PATHS },
+  paths: { ...AUTH_PATHS, ...SSO_PATHS, ...SETTINGS_PATHS, ...ADMIN_PATHS, ...SESSION_PATHS, ...SPEC_PATHS },
   components: {
     schemas: SCHEMAS,
   },

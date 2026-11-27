@@ -22,6 +22,7 @@ const BACKEND_LABELS: Record<string, string> = {
 interface StepDraft {
   backend: string;
   model: string;
+  alternativeModels: string;
   baseUrl: string;
   timeoutSeconds: string;
   maxTokens: string;
@@ -40,12 +41,12 @@ interface ProcessingDraft {
 }
 
 const NUMBER_FIELDS = ['timeoutSeconds', 'maxTokens', 'numThread', 'maxAttempts', 'summaryWordLimit'] as const;
-const TEXT_FIELDS = ['backend', 'model', 'baseUrl', 'reasoningEffort'] as const;
+const TEXT_FIELDS = ['backend', 'model', 'alternativeModels', 'baseUrl', 'reasoningEffort'] as const;
 
 function toStepDraft(step: MlConfigStep): StepDraft {
   const stored = (name: string): string => (step.stored[name] === undefined ? '' : String(step.stored[name]));
   return {
-    backend: stored('backend'), model: stored('model'), baseUrl: stored('baseUrl'),
+    backend: stored('backend'), model: stored('model'), alternativeModels: stored('alternativeModels'), baseUrl: stored('baseUrl'),
     timeoutSeconds: stored('timeoutSeconds'), maxTokens: stored('maxTokens'), numThread: stored('numThread'),
     maxAttempts: stored('maxAttempts'), reasoningEffort: stored('reasoningEffort'),
     summaryWordLimit: stored('summaryWordLimit'), apiKey: '', removeApiKey: false,
@@ -196,6 +197,9 @@ export function InferenceSettingsCard({ canEdit }: { canEdit: boolean }) {
                       </Field>
                       <Field label="Model" htmlFor={`${id}-model`}>
                         <input id={`${id}-model`} className={inputClass} value={draft.model} placeholder={view.effective.model} onChange={(event) => updateStep(id, { model: event.target.value })} />
+                      </Field>
+                      <Field label="Other models users may pick" htmlFor={`${id}-alternativeModels`} hint="Comma separated names served by the same source. Offered when starting an analysis.">
+                        <input id={`${id}-alternativeModels`} className={inputClass} value={draft.alternativeModels} placeholder="none" onChange={(event) => updateStep(id, { alternativeModels: event.target.value })} />
                       </Field>
                       <Field label="Base URL" htmlFor={`${id}-baseUrl`} hint={backend === 'llamacpp' ? 'Required for llama.cpp, for example http://127.0.0.1:8080' : undefined}>
                         <input id={`${id}-baseUrl`} className={inputClass} value={draft.baseUrl} placeholder={view.effective.baseUrl || 'http://host:port'} onChange={(event) => updateStep(id, { baseUrl: event.target.value })} />

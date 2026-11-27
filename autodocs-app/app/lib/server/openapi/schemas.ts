@@ -66,7 +66,7 @@ export const SCHEMAS: Record<string, JsonSchema> = {
   },
   TerminalSession: {
     type: 'object',
-    properties: { id: UUID_STRING, title: STRING, durationSeconds: { type: 'number' }, content: { ...STRING, description: 'The analysed recording as stored by the app.' }, createdAt: DATE_TIME },
+    properties: { id: UUID_STRING, title: STRING, durationSeconds: { type: 'number' }, content: { ...STRING, description: 'Events of the latest analysis as JSON; empty before one has run.' }, createdAt: DATE_TIME },
   },
   SharedTerminalSession: {
     allOf: [
@@ -77,18 +77,53 @@ export const SCHEMAS: Record<string, JsonSchema> = {
   TerminalSessionCreate: {
     type: 'object',
     required: ['title', 'content'],
-    properties: { title: STRING, durationSeconds: { type: 'number', minimum: 0 }, content: { ...STRING, description: 'An asciinema recording.' } },
+    properties: { title: STRING, content: { ...STRING, description: 'An asciinema recording.' } },
   },
   ShareRequest: {
     type: 'object',
     required: ['terminalSessionId'],
     description: 'Identify the person to share with by targetUserId or by targetUserEmail.',
-    properties: { terminalSessionId: UUID_STRING, targetUserId: UUID_STRING, targetUserEmail: { type: 'string', format: 'email' } },
+    properties: { terminalSessionId: UUID_STRING, targetUserId: UUID_STRING, targetUserEmail: { type: 'string', format: 'email' }, canAnnotate: { ...BOOLEAN, description: 'Also allow adding and changing annotations.' } },
   },
-  JobCreate: {
+  AnnotationLayer: { type: 'object', properties: { id: UUID_STRING, title: STRING, position: { type: 'integer' } } },
+  AnnotationInput: {
     type: 'object',
-    required: ['title', 'content', 'durationSeconds'],
-    properties: { title: STRING, content: { ...STRING, description: 'An asciinema recording.' }, durationSeconds: { type: 'integer', minimum: 0 } },
+    required: ['layerId', 'startMs', 'endMs'],
+    properties: { layerId: UUID_STRING, startMs: { type: 'integer', minimum: 0 }, endMs: { type: 'integer', minimum: 0 }, text: STRING, depth: { type: 'integer', nullable: true, minimum: -1 } },
+  },
+  AnnotationChanges: {
+    type: 'object',
+    required: ['expectedVersion'],
+    properties: { expectedVersion: { type: 'integer' }, layerId: UUID_STRING, startMs: { type: 'integer' }, endMs: { type: 'integer' }, text: STRING, depth: { type: 'integer', nullable: true } },
+  },
+  Annotation: {
+    type: 'object',
+    properties: {
+      id: UUID_STRING, layerId: UUID_STRING, startMs: { type: 'integer' }, endMs: { type: 'integer' }, text: STRING, depth: { type: 'integer', nullable: true },
+      origin: { type: 'string', enum: ['ai', 'human', 'imported'] }, authorName: { ...STRING, nullable: true },
+      aiBackend: { ...STRING, nullable: true }, aiModel: { ...STRING, nullable: true },
+      boundaryBackend: { ...STRING, nullable: true }, boundaryModel: { ...STRING, nullable: true },
+      editedByName: { ...STRING, nullable: true }, editedAt: { ...DATE_TIME, nullable: true },
+      version: { type: 'integer' }, createdAt: DATE_TIME,
+    },
+  },
+  AnnotationRevision: { type: 'object', properties: { id: STRING, annotationId: { ...UUID_STRING, nullable: true }, action: STRING, actorName: STRING, summary: STRING, createdAt: DATE_TIME } },
+  SessionDetail: {
+    type: 'object',
+    properties: {
+      id: UUID_STRING, title: STRING, durationSeconds: { type: 'number' }, createdAt: DATE_TIME,
+      access: { type: 'object', properties: { isOwner: BOOLEAN, canAnnotate: BOOLEAN } },
+      recordingSource: { type: 'string', enum: ['original', 'reconstructed', 'missing'] },
+      layers: { type: 'array', items: ref('AnnotationLayer') }, annotations: { type: 'array', items: ref('Annotation') },
+    },
+  },
+  AnalysisOptions: {
+    type: 'object',
+    properties: { boundaryModel: STRING, annotateModel: STRING, summaryWordLimit: { type: 'integer', minimum: 5, maximum: 500 }, reasoningEffort: { type: 'string', enum: ['low', 'medium', 'high'] } },
+  },
+  AnalysisChoices: {
+    type: 'object',
+    properties: { mode: { type: 'string', enum: ['jobs', 'direct'] }, serviceReachable: BOOLEAN, canUseAnyModel: BOOLEAN, boundaries: { type: 'object' }, annotate: { type: 'object' } },
   },
   JobStage: {
     type: 'object',

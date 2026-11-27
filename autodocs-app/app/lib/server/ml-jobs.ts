@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { AnalysisModels, AnalysisOptions } from '@/app/lib/annotations/analysis';
 
 export interface MlJobStage {
   id: string;
@@ -30,6 +31,8 @@ export type MlJobControlAction = 'pause' | 'resume' | 'cancel';
 export interface MlJobStatus {
   id: string;
   title: string;
+  /** The recording being analysed; added by the web app. */
+  sessionId?: string | null;
   status: MlJobState;
   percent: number;
   createdAt: string;
@@ -49,7 +52,7 @@ export interface MlJobStatus {
   stages: MlJobStage[];
   timeline: MlJobTimelineEvent[];
   error: string | null;
-  result: { content: string[] } | null;
+  result: { content: string[]; models?: AnalysisModels } | null;
 }
 
 export function mlServiceUrl(): string {
@@ -58,11 +61,11 @@ export function mlServiceUrl(): string {
   return url.replace(/\/$/, '');
 }
 
-export async function enqueueMlJob(input: { id: string; title: string; content: string; parallelRequests?: number }): Promise<MlJobStatus> {
+export async function enqueueMlJob(input: { id: string; title: string; content: string; parallelRequests?: number; options?: AnalysisOptions }): Promise<MlJobStatus> {
   const response = await fetch(`${mlServiceUrl()}/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId: input.id, title: input.title, content: input.content, parallelRequests: input.parallelRequests }),
+    body: JSON.stringify({ jobId: input.id, title: input.title, content: input.content, parallelRequests: input.parallelRequests, options: input.options }),
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`ML job enqueue failed with status ${response.status}`);
