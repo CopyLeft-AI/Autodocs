@@ -54,7 +54,7 @@ class JobStore:
     def _stages() -> list[dict[str, Any]]:
         return [{"id": identifier, "label": label, "weight": weight, "status": "pending", "current": 0, "total": 0, "estimated": False, "detail": ""} for identifier, label, weight in STAGES]
 
-    async def create(self, job_id: str, title: str, content: str, concurrency: int | None = None) -> dict[str, Any]:
+    async def create(self, job_id: str, title: str, content: str, concurrency: int | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
         """Persist source input first, then publish an observable queued job."""
         async with self._lock:
             input_path = self._input_path(job_id)
@@ -63,7 +63,7 @@ class JobStore:
             os.chmod(temporary_path, 0o600)
             temporary_path.replace(input_path)
             now = self._now()
-            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "requestedConcurrency": concurrency, "parallelRequests": 1, "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for an inference worker."}], "error": None, "result": None}
+            state = {"id": job_id, "title": title, "status": "queued", "percent": 0, "createdAt": now, "updatedAt": now, "stages": self._stages(), "requestedConcurrency": concurrency, "options": options, "parallelRequests": 1, "startedAt": None, "pausedAt": None, "pausedSeconds": 0.0, "timeline": [{"at": now, "kind": "queued", "message": "Upload accepted; waiting for an inference worker."}], "error": None, "result": None}
             self._write_json(self._state_path(job_id), state)
             return state
 

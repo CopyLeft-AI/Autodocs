@@ -18,6 +18,7 @@ from concurrency import RequestLimiter, effective_concurrency
 from config import load_config
 from event_stream import EventSplitter
 from job_control import JobControl
+from job_options import apply_options, models_used
 from job_store import JobStore
 from resources import is_local_inference
 
@@ -224,7 +225,7 @@ class JobRunner:
         # Settings are read once per job, so editing the configuration never
         # changes a job that is already running.
         config = load_config()
-        boundary_step, annotate_step = config.steps["boundaries"], config.steps["annotate"]
+        boundary_step, annotate_step = apply_options(config, state.get("options"))
         parallel = model0.boundary_concurrency(state.get("requestedConcurrency"), boundary_step, config)
         await self.store.set_parallel_requests(job_id, parallel)
         mode = f" ({parallel} requests in parallel)" if parallel > 1 else ""
@@ -300,6 +301,7 @@ class JobRunner:
         await self.store.complete_stage(job_id, "annotate", f"Generated {len(predictions)} event summaries.")
         await self.store.stage(job_id, "finalize", 1, "Formatting results for the AutoDocs application.")
         result = {
+            "models": models_used(boundary_step, annotate_step),
             "content": [
                 json.dumps({
                     "idx": index,
