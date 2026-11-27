@@ -5,7 +5,6 @@
 import { appendRun, paletteColour, rgbColour, type Run, type TextStyle } from './screen';
 
 // CSI, OSC, other string sequences, two-character escapes, then lone controls.
-// eslint-disable-next-line no-control-regex
 const SEQUENCE = /\x1b\[([0-?]*)[ -/]*([@-~])|\x1b\][\s\S]*?(?:\x07|\x1b\\|$)|\x1b[P^_X][\s\S]*?(?:\x1b\\|$)|\x1b[ -/]*[0-~]?|[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]|\r\n?/g;
 
 function extendedColour(codes: number[], index: number): { colour?: string; used: number } {
@@ -72,7 +71,6 @@ export function colourText(text: string, style: TextStyle = {}): { lines: Run[][
 }
 
 // Escape sequences and controls stay; the lookahead keeps an unfinished sequence for the next chunk.
-// eslint-disable-next-line no-control-regex
 const TOKEN = /(\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[P^_X][\s\S]*?\x1b\\|\x1b[ -/]*[0-OQ-WYZ\\`-~]|[\x00-\x1a\x1c-\x1f\x7f])|(\x1b[\s\S]*$)|([^\x00-\x1f\x7f]+)/g;
 
 const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;

@@ -41,10 +41,10 @@ export function readResultEvents(lines: string[]): SessionEvent[] {
 }
 
 export function readModels(value: unknown): AnalysisModels {
-  const use = (entry: unknown): ModelUse | null => {
+  const modelUse = (entry: unknown): ModelUse | null => {
     const candidate = entry as Partial<ModelUse> | null | undefined;
     return typeof candidate?.model === 'string' && typeof candidate.backend === 'string' ? { backend: candidate.backend, model: candidate.model } : null;
   };
   const models = value as Partial<Record<keyof AnalysisModels, unknown>> | null | undefined;
-  return { boundaries: use(models?.boundaries), annotate: use(models?.annotate) };
+  return { boundaries: modelUse(models?.boundaries), annotate: modelUse(models?.annotate) };
 }
