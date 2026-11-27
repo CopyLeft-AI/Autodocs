@@ -19,6 +19,7 @@ permissions and API keys are never returned by the API.
 | `backend` | `ollama`, `llamacpp`, `openai` (any OpenAI-compatible `/chat/completions` API, http or https) or `cloudtemple` |
 | `model`, `baseUrl`, `apiKey` | Model name, server URL, API key (chat backends) |
 | `timeoutSeconds`, `maxTokens` | Request timeout and output limit |
+| `alternativeModels` | Comma-separated model names that users of the web app may pick instead of `model` |
 | `numThread` | Ollama only |
 | `maxAttempts` | Chat backends: retries on 429/5xx |
 | `reasoningEffort` | `annotate` with Ollama: `low`, `medium` or `high` |
@@ -43,6 +44,14 @@ default, omitting `apiKey` keeps the stored key, `""` removes it, invalid
 values return 422 and write nothing. The service has no login of its own;
 anyone who can reach it can read and change the configuration, so keep it on a
 private network (the web app requires a signed-in user for its settings API).
+
+## Choosing models per analysis
+
+`POST /` and `POST /jobs` accept an optional `options` object: `boundaryModel`,
+`annotateModel`, `summaryWordLimit` (5 to 500) and `reasoningEffort`. It never
+changes the backend, server address or key. Results report the models used in
+`models`. To serve both models with llama.cpp, see
+[`deploy/llamacpp`](deploy/llamacpp/README.md).
 
 ## Prerequisites
 
