@@ -62,13 +62,13 @@ interface SessionRow {
   durationSeconds: number;
   content: string;
   createdAt: string;
-  recording: string | null;
+  hasRecording: boolean;
   legacyImported: boolean;
 }
 
 async function selectSession(sessionId: string, client: PoolClient | typeof db, lock = false): Promise<SessionRow> {
   const row = (await client.query<SessionRow>(
-    `SELECT id, title, duration_seconds AS "durationSeconds", content, created_at AS "createdAt", recording,
+    `SELECT id, title, duration_seconds AS "durationSeconds", content, created_at AS "createdAt", recording IS NOT NULL AS "hasRecording",
             legacy_imported AS "legacyImported"
      FROM terminal_sessions WHERE id = $1 ${lock ? 'FOR UPDATE' : ''}`,
     [sessionId],
@@ -111,7 +111,7 @@ export async function getSessionDetail(userId: string, sessionId: string): Promi
   )).rows;
   return {
     id: row.id, title: row.title, durationSeconds: row.durationSeconds, createdAt: row.createdAt, access,
-    recordingSource: row.recording ? 'original' : reconstructRecording(parseSessionContent(row.content)) ? 'reconstructed' : 'missing',
+    recordingSource: row.hasRecording ? 'original' : reconstructRecording(parseSessionContent(row.content)) ? 'reconstructed' : 'missing',
     layers: await listLayers(sessionId),
     annotations,
   };
@@ -121,7 +121,11 @@ export async function getSessionDetail(userId: string, sessionId: string): Promi
 export async function loadRecordingText(userId: string, sessionId: string): Promise<{ title: string; text: string }> {
   await requireAccess(userId, sessionId, 'view');
   const row = await selectSession(sessionId, db);
-  if (row.recording) return { title: row.title, text: row.recording };
+  if (row.hasRecording) {
+    // Read only here: the file can be tens of megabytes.
+    const stored = (await db.query<{ recording: string }>('SELECT recording FROM terminal_sessions WHERE id = $1', [sessionId])).rows[0];
+    if (stored) return { title: row.title, text: stored.recording };
+  }
   const rebuilt = reconstructRecording(parseSessionContent(row.content));
   if (!rebuilt) throw new RequestError(404, 'The original recording of this session was never stored.');
   return { title: row.title, text: toVersion2(rebuilt) };

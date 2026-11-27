@@ -4,7 +4,7 @@ import { RequestError } from './errors';
 
 const MAX_TEXT = 20_000;
 const MAX_MS = 2_000_000_000;
-const UUID = /^[0-9a-f-]{36}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const FIELDS: { [Key in keyof AnnotationInput]: (value: unknown) => boolean } = {
   layerId: (value) => typeof value === 'string' && UUID.test(value),

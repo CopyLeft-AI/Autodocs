@@ -22,10 +22,13 @@ interface AnnotationFormProps {
 }
 
 /** The text being typed, saved shortly after the last key, without overwriting other people. */
-function useAutosavedText(annotation: Annotation, update: SessionEditor['actions']['updateAnnotation'], readOnly: boolean) {
+function useAutosavedText(annotation: Annotation, actions: SessionEditor['actions'], readOnly: boolean) {
   const [base, setBase] = useState({ text: annotation.text, version: annotation.version });
   const [draft, setDraft] = useState(annotation.text);
-  const [saving, setSaving] = useState(false);
+  const [inFlight, setInFlight] = useState(0);
+  /** The newest text on its way to the server. */
+  const sent = useRef<string | null>(null);
+  const saving = inFlight > 0;
   const dirty = draft !== base.text;
 
   // A newer server copy replaces ours when it cannot lose typing.
@@ -35,24 +38,32 @@ function useAutosavedText(annotation: Annotation, update: SessionEditor['actions
   }
   const conflict = !saving && dirty && annotation.version > base.version && annotation.text !== base.text;
 
+  const { updateAnnotation, setUnsaved } = actions;
+  // Saves may overlap: the editor sends them in order.
   const save = useCallback(async () => {
-    if (readOnly || saving || conflict || draft === base.text) return;
-    setSaving(true);
-    const saved = await update({ ...annotation, version: base.version }, { text: draft });
-    if (saved) setBase({ text: saved.text, version: saved.version });
-    setSaving(false);
-  }, [readOnly, saving, conflict, draft, base, update, annotation]);
+    if (readOnly || conflict || draft === (sent.current ?? base.text)) return;
+    sent.current = draft;
+    setInFlight((count) => count + 1);
+    const saved = await updateAnnotation({ ...annotation, version: base.version }, { text: draft });
+    if (saved) setBase((current) => (saved.version > current.version ? { text: saved.text, version: saved.version } : current));
+    if (sent.current === draft) sent.current = null;
+    setInFlight((count) => count - 1);
+  }, [readOnly, conflict, draft, base, updateAnnotation, annotation]);
 
   const latest = useRef(save);
   useEffect(() => { latest.current = save; });
-  // Retrying only after the next change avoids repeating a request that just failed.
+  // Not retried until the text or its base changes, so a failing request is not repeated.
   useEffect(() => {
     if (!dirty) return;
     const timer = setTimeout(() => void latest.current(), SAVE_DELAY_MILLISECONDS);
     return () => clearTimeout(timer);
-  }, [draft, dirty]);
+  }, [draft, dirty, base.version]);
   // Leaving the annotation saves what was typed.
   useEffect(() => () => void latest.current(), []);
+  useEffect(() => {
+    setUnsaved(dirty && !readOnly);
+    return () => setUnsaved(false);
+  }, [dirty, readOnly, setUnsaved]);
 
   return {
     draft, setDraft, dirty, conflict, saving, save,
@@ -82,7 +93,7 @@ function TimeField({ label, value, readOnly, timeMs, onCommit }: { label: string
 
 /** Edit one annotation. Remount (by key) for another one. */
 export function AnnotationForm({ annotation, actions, readOnly, timeMs, durationMs, textReference, confirmingDelete, onAskDelete, onDelete }: AnnotationFormProps) {
-  const text = useAutosavedText(annotation, actions.updateAnnotation, readOnly);
+  const text = useAutosavedText(annotation, actions, readOnly);
   const setTimes = (startMs: number, endMs: number) => {
     const limit = (value: number) => Math.min(Math.max(0, value), Math.max(durationMs, annotation.endMs));
     void actions.updateAnnotation(annotation, { startMs: limit(Math.min(startMs, endMs)), endMs: limit(Math.max(startMs, endMs)) });

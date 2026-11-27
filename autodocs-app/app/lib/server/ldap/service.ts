@@ -107,3 +107,20 @@ export async function syncUserAtLogin(user: { id: string; email: string }): Prom
     console.error('LDAP synchronisation at sign-in failed for user', user.id, error);
   }
 }
+
+/**
+ * Directory groups are found by email, which users can set without proving they
+ * own it. While the directory is in use, an account that takes rights from groups
+ * or already has directory groups must not change its own email.
+ */
+export async function emailDecidesRights(userId: string): Promise<boolean> {
+  const result = await db.query(
+    `SELECT 1 FROM users u WHERE u.id = $1
+       AND EXISTS (SELECT 1 FROM ldap_settings WHERE enabled)
+       AND (u.rights_mode = 'groups' OR EXISTS (
+         SELECT 1 FROM user_group_members m JOIN user_groups g ON g.id = m.group_id
+         WHERE m.user_id = u.id AND g.source = 'ldap'))`,
+    [userId],
+  );
+  return result.rows.length > 0;
+}

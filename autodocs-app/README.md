@@ -106,7 +106,9 @@ and by "Synchronise everyone now". Directory groups are created without rights,
 and a directory group whose name matches a local group is ignored, so grant
 rights in the Groups tab. Rights apply only to users set to take rights from
 groups. Because signup does not verify email addresses, switch a user to group
-rights only once their account is known to be theirs. Use `ldaps://` or StartTLS.
+rights only once their account is known to be theirs. While the directory is
+enabled, an account that takes rights from groups, or has directory groups,
+cannot change its own email. Use `ldaps://` or StartTLS.
 The bind password is stored encrypted with the same key as single sign-on
 secrets. Existing databases need `db/init/011_ldap.sql`.
 

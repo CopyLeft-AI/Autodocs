@@ -76,7 +76,7 @@ export function useAnalysisJobs({ onJobSaved }: AnalysisJobsOptions = {}): Analy
     }, [onJobSaved]);
 
     const replaceJob = useCallback((updated: MlJobStatus): void => {
-        setJobs((current) => current.map((job) => (job.id === updated.id ? updated : job)));
+        setJobs((current) => current.map((job) => (job.id === updated.id ? { ...updated, sessionId: updated.sessionId ?? job.sessionId } : job)));
     }, []);
 
     const setBusy = useCallback((jobId: string, isBusy: boolean): void => {

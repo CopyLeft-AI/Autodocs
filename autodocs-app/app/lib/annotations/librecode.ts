@@ -23,6 +23,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 const MAX_MS = 2_000_000_000;
 
+/** The database refuses NUL characters in text. */
+const withoutNul = (value: string): string => value.replaceAll('\u0000', '');
+
 function milliseconds(value: unknown): number | null {
   const number = typeof value === 'string' ? Number(value) : value;
   return typeof number === 'number' && Number.isFinite(number) ? Math.min(MAX_MS, Math.max(0, Math.round(number))) : null;
@@ -46,11 +49,12 @@ export function readLibrecodeAnnotations(header: Record<string, unknown>): Porta
         startMs: Math.min(first, second),
         endMs: Math.max(first, second),
         text: typeof entry.text === 'string' ? entry.text : '',
-        depth: typeof entry.depth === 'number' && Number.isInteger(entry.depth) ? entry.depth : null,
-        claimedAuthor: typeof author === 'string' ? author.slice(0, 120) : null,
+        depth: typeof entry.depth === 'number' && Number.isInteger(entry.depth) && entry.depth >= -1 && entry.depth <= 100 ? entry.depth : null,
+        claimedAuthor: typeof author === 'string' ? withoutNul(author).slice(0, 120) : null,
       }];
     });
-    const title = typeof layer.title === 'string' && layer.title.trim() ? layer.title.trim().slice(0, 120) : `Timeline Level ${index}`;
+    const name = typeof layer.title === 'string' ? withoutNul(layer.title).trim() : '';
+    const title = name ? name.slice(0, 120) : `Timeline Level ${index}`;
     return [{ title, annotations }];
   });
 }

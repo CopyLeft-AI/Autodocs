@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/app/lib/server/db';
 import { signAuthToken } from '@/app/lib/server/auth';
+import { emailDecidesRights } from '@/app/lib/server/ldap/service';
 import { getUserFromAccessToken, rotateSession, toClientUser, type SessionUser } from '@/app/lib/server/session-auth';
 import {
   ACCESS_COOKIE_NAME,
@@ -107,6 +108,13 @@ export async function PATCH(request: NextRequest) {
     const passwordOk = await bcrypt.compare(currentPassword, currentUser.password_hash);
     if (!passwordOk) {
       return NextResponse.json({ message: 'Current password is incorrect.' }, { status: 401 });
+    }
+
+    if (await emailDecidesRights(currentUser.id)) {
+      return NextResponse.json(
+        { message: 'Your rights come from the directory, which matches you by email. Ask an administrator to set your account to its own rights before changing it.' },
+        { status: 403 },
+      );
     }
 
     const existing = await db.query<{ id: string }>(

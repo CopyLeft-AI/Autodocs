@@ -65,7 +65,8 @@ async function startJob(actor: Actor, sessionId: string, title: string, content:
   );
   try {
     const parallelRequests = (await readRemoteApiConcurrency(actor.id)) ?? undefined;
-    return { job: await enqueueMlJob({ id: jobId, title, content, parallelRequests, options }) };
+    const job = await enqueueMlJob({ id: jobId, title, content, parallelRequests, options });
+    return { job: { ...job, sessionId } };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not start analysis.';
     console.error('Could not enqueue analysis job:', jobId, message);

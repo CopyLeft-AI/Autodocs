@@ -227,7 +227,7 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
         <h1 className="min-w-0 flex-1 truncate text-base" title={session.title}>{session.title}</h1>
         {readOnly
           ? <span className="rounded border border-border px-2 py-1 text-xs text-muted-foreground">View only</span>
-          : <span role="status" className={`text-xs ${editor.saveState === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>{editor.saveState === 'saving' ? 'Saving…' : editor.saveState === 'failed' ? 'Last change not saved' : 'All changes saved'}</span>}
+          : <span role="status" className={`text-xs ${editor.saveState === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>{editor.saveState === 'saving' ? 'Saving…' : editor.saveState === 'failed' ? 'Last change not saved' : editor.saveState === 'unsaved' ? 'Not saved yet' : 'All changes saved'}</span>}
         {!readOnly && session.recordingSource !== 'missing' && <button type="button" onClick={() => setDialog('analysis')} className={headerButton}><IconSparkles size={16} /> Run a model</button>}
         {session.access.isOwner && <button type="button" onClick={() => setDialog('share')} className={headerButton}><IconShare size={16} /> Share</button>}
         {session.recordingSource !== 'missing' && (
