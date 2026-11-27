@@ -98,7 +98,7 @@ describe('analysis results', () => {
       { label: 'b', depth: 0, content: null },
       { label: 'c', depth: 1, content: '<user_input timestamp="5">c</user_input>' },
     ], 9000);
-    expect(timed.map((item) => [item.startMs, item.endMs])).toEqual([[1000, 3000], [3000, 5000], [5000, 9000]]);
+    expect(timed.map((item) => [item.startMs, item.endMs])).toEqual([[1000, 2999], [3000, 4999], [5000, 9000]]);
     expect(timeAnalysisEvents([], 100)).toEqual([]);
   });
 

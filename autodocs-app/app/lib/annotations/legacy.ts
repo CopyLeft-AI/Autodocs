@@ -45,7 +45,8 @@ export function timeAnalysisEvents(events: SessionEvent[], durationMs: number): 
   }
   return events.map((event, index) => ({
     startMs: starts[index],
-    endMs: Math.max(starts[index], index + 1 < events.length ? starts[index + 1] : durationMs),
+    // An event ends just before the next one starts, so the two never share a terminal write.
+    endMs: Math.max(starts[index], index + 1 < events.length ? starts[index + 1] - 1 : durationMs),
     text: event.label,
     depth: event.depth,
     claimedAuthor: null,
