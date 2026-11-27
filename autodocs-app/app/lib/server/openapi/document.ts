@@ -1,5 +1,6 @@
 // Ours
 import { ADMIN_PATHS } from './paths-admin';
+import { LDAP_PATHS } from './paths-ldap';
 import { AUTH_PATHS } from './paths-auth';
 import { SESSION_PATHS } from './paths-sessions';
 import { SETTINGS_PATHS } from './paths-settings';
@@ -44,7 +45,7 @@ export const OPENAPI_DOCUMENT: OpenApiDocument = {
     { name: 'Annotations', description: 'Timelines and annotations of a recording, with their history.' },
     { name: 'Documentation', description: 'This description.' },
   ],
-  paths: { ...AUTH_PATHS, ...SSO_PATHS, ...SETTINGS_PATHS, ...ADMIN_PATHS, ...SESSION_PATHS, ...SPEC_PATHS },
+  paths: { ...AUTH_PATHS, ...SSO_PATHS, ...SETTINGS_PATHS, ...ADMIN_PATHS, ...LDAP_PATHS, ...SESSION_PATHS, ...SPEC_PATHS },
   components: {
     schemas: SCHEMAS,
   },

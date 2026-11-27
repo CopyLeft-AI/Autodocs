@@ -8,17 +8,24 @@ import { RequestError } from './errors';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Authenticate, run the handler, and turn failures into JSON error responses. */
-export async function signedIn(request: NextRequest, handler: (user: SessionUser) => Promise<Response>): Promise<Response> {
+/** Run a handler and turn failures into JSON error responses. */
+export async function handled(handler: () => Promise<Response>): Promise<Response> {
   try {
-    const user = await getRequestUser(request);
-    if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-    return await handler(user);
+    return await handler();
   } catch (error) {
     if (error instanceof RequestError) return NextResponse.json({ message: error.message }, { status: error.status });
-    console.error('Error in recordings API:', request.method, request.nextUrl.pathname, error);
+    console.error('Request failed:', error);
     return NextResponse.json({ message: 'The request could not be completed.' }, { status: 500 });
   }
+}
+
+/** Authenticate, then run the handler. */
+export async function signedIn(request: NextRequest, handler: (user: SessionUser) => Promise<Response>): Promise<Response> {
+  return handled(async () => {
+    const user = await getRequestUser(request);
+    if (!user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    return handler(user);
+  });
 }
 
 export function requireUuid(value: string): string {
