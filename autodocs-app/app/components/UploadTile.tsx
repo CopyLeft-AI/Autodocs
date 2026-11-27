@@ -1,101 +1,55 @@
 "use client";
 
-import { IconAlertTriangle, IconCheck, IconCloudUpload, IconLoader2 } from '@tabler/icons-react';
+import { IconAlertTriangle, IconCloudUpload, IconLoader2 } from '@tabler/icons-react';
+import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
+import { AnalysisDialog } from '@/app/components/AnalysisDialog';
 import { UploadProgressPanel } from '@/app/components/UploadProgressPanel';
 import { useAnalysisJobs } from '@/app/lib/use-analysis-jobs';
-import type { MlJobStatus } from '@/app/lib/server/ml-jobs';
+import { parseCast, titleFromFileName } from '@/app/lib/cast/parse';
+import { messageOf, request } from '@/app/lib/editor/api';
 
-/** `registering` = reading the file and handing it to the server; `processing` = legacy synchronous analysis. */
-type UploadState = 'idle' | 'registering' | 'processing' | 'success' | 'error';
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
-interface RecordingInput {
-    title: string;
-    durationSeconds: number;
-    content: string;
-}
+type UploadState = 'idle' | 'registering' | 'error';
 
-interface LegacyUploadResponse {
-    terminalSession?: { id: string };
-    message?: string;
-}
+interface UploadedSession { id: string; title: string; }
 
 interface UploadTileProperties {
+    /** Called when a recording is stored or an analysis result arrives. */
     onUploadSuccess?: () => void;
 }
 
-async function readRecording(file: File): Promise<RecordingInput> {
-    if (file.name.split('.').pop()?.toLowerCase() !== 'cast') {
-        throw new Error('Unsupported file type. Please upload a .cast file.');
+/** Recognised by content, so a recording without the .cast extension also works. */
+async function readRecording(file: File): Promise<{ title: string; content: string }> {
+    if (file.size > MAX_FILE_BYTES) {
+        throw new Error('This file is larger than 50 MB.');
     }
 
     const content = await file.text();
-    const lines = content.split('\n').map((line) => line.trim()).filter(Boolean);
+    const parsed = parseCast(content);
 
-    if (lines.length < 2) {
-        throw new Error('Invalid .cast file format.');
+    if (!parsed.ok) {
+        throw new Error(parsed.error);
     }
 
-    const lastEvent = JSON.parse(lines.at(-1) ?? '');
-
-    if (!Array.isArray(lastEvent) || typeof lastEvent[0] !== 'number') {
-        throw new Error('Failed to parse duration from .cast file.');
-    }
-
-    return {
-        title: file.name.replace(/\.[^/.]+$/, ''),
-        durationSeconds: Math.round(lastEvent[0]),
-        content,
-    };
+    return { title: titleFromFileName(file.name), content };
 }
 
 /**
- * Uploads recordings through the configured legacy or local-CPU protocol.
- * With the local-CPU protocol the drop zone never blocks: every upload becomes
- * its own job, shown with its own progress panel, so analyses can run in parallel.
+ * Stores a recording, then asks how to annotate it: by hand or with a chosen
+ * model. Background analyses each get their own progress panel.
  */
 export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
+    const router = useRouter();
     const [isDragging, setIsDragging] = useState(false);
     const [uploadState, setUploadState] = useState<UploadState>('idle');
     const [uploadError, setUploadError] = useState<string | null>(null);
+    const [uploaded, setUploaded] = useState<UploadedSession | null>(null);
     const fileInputReference = useRef<HTMLInputElement>(null);
 
     const analysisJobs = useAnalysisJobs({ onJobSaved: onUploadSuccess });
-    const { jobs, isEnabled, isResolved, isAuthenticationExpired } = analysisJobs;
-
-    const uploadThroughLegacyEndpoint = async (input: RecordingInput): Promise<void> => {
-        setUploadState('processing');
-
-        const response = await fetch('/api/terminal-sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(input),
-        });
-        const body = await response.json().catch(() => ({})) as LegacyUploadResponse;
-
-        if (!response.ok) {
-            throw new Error(body.message ?? `Could not process upload (${response.status}).`);
-        }
-
-        setUploadState('success');
-        onUploadSuccess?.();
-    };
-
-    const uploadThroughLocalCpuJobs = async (input: RecordingInput): Promise<void> => {
-        const response = await fetch('/api/terminal-session-jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(input),
-        });
-        const body = await response.json().catch(() => ({})) as { job?: MlJobStatus; message?: string };
-
-        if (!response.ok || !body.job) {
-            throw new Error(body.message ?? `Could not start analysis (${response.status}).`);
-        }
-
-        analysisJobs.addJob(body.job);
-        setUploadState('idle');
-    };
+    const { jobs, isAuthenticationExpired } = analysisJobs;
 
     const handleFileUpload = async (file: File): Promise<void> => {
         setUploadState('registering');
@@ -103,55 +57,35 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
 
         try {
             const input = await readRecording(file);
-
-            if (isEnabled) {
-                await uploadThroughLocalCpuJobs(input);
-            } else {
-                await uploadThroughLegacyEndpoint(input);
-            }
+            const { terminalSession } = await request<{ terminalSession: UploadedSession }>('POST', '/api/terminal-sessions', input);
+            setUploaded({ id: terminalSession.id, title: input.title });
+            setUploadState('idle');
+            onUploadSuccess?.();
         } catch (error) {
-            setUploadError(error instanceof Error ? error.message : 'Upload failed.');
+            setUploadError(messageOf(error));
             setUploadState('error');
         }
     };
 
     const errorMessage = uploadError ?? analysisJobs.errorMessage;
     const hasError = errorMessage !== null && (uploadState === 'error' || jobs.length === 0 || isAuthenticationExpired);
-    const isBusy = !isResolved || isAuthenticationExpired || uploadState === 'registering' || uploadState === 'processing';
+    const isBusy = isAuthenticationExpired || uploadState === 'registering';
 
-    const title = !isResolved
-        ? 'Checking upload configuration…'
-        : uploadState === 'registering'
-            ? 'Preparing upload…'
-            : uploadState === 'processing'
-                ? 'Processing upload…'
-                : uploadState === 'success'
-                    ? 'Session saved'
-                    : isAuthenticationExpired
-                        ? 'Sign in to resume progress'
-                        : uploadState === 'error'
-                            ? 'Upload failed'
-                            : 'Upload Session';
-    const subtitle = !isResolved
-        ? 'Preparing the configured upload workflow.'
-        : uploadState === 'registering'
-            ? isEnabled ? 'Saving your upload as a durable analysis job.' : 'Reading your recording.'
-            : uploadState === 'processing'
-                ? 'The configured analyzer is processing this recording.'
-                : uploadState === 'success'
-                    ? 'Your annotated session is ready.'
-                    : hasError
-                        ? errorMessage
-                        : isEnabled && jobs.length > 0
-                            ? 'Analyses continue in the background. Drop another recording to start one in parallel.'
-                            : 'Drop an asciinema .cast recording here or click to browse.';
-    const icon = uploadState === 'success'
-        ? <IconCheck className="text-emerald-400" size={30} />
-        : uploadState === 'error' || isAuthenticationExpired
-            ? <IconAlertTriangle className="text-destructive" size={30} />
-            : isBusy
-                ? <IconLoader2 className="text-primary animate-spin" size={30} />
-                : <IconCloudUpload className="text-primary" size={30} />;
+    const title = uploadState === 'registering'
+        ? 'Saving the recording…'
+        : isAuthenticationExpired
+            ? 'Sign in to resume progress'
+            : uploadState === 'error' ? 'Upload failed' : 'Upload Session';
+    const subtitle = uploadState === 'registering'
+        ? 'Reading and storing your file.'
+        : hasError
+            ? errorMessage
+            : 'Drop an asciinema recording here or click to browse. You then choose how to annotate it.';
+    const icon = uploadState === 'error' || isAuthenticationExpired
+        ? <IconAlertTriangle className="text-destructive" size={30} />
+        : isBusy
+            ? <IconLoader2 className="text-primary animate-spin" size={30} />
+            : <IconCloudUpload className="text-primary" size={30} />;
 
     return (
         <div className="space-y-4">
@@ -176,7 +110,6 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
                     ref={fileInputReference}
                     type="file"
                     className="hidden"
-                    accept=".cast"
                     onChange={(event) => {
                         const file = event.target.files?.[0];
 
@@ -191,7 +124,7 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
                     <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">{icon}</div>
                     <h3 className="text-foreground mb-2">{title}</h3>
                     <p className={`text-sm text-center max-w-sm ${hasError ? 'text-destructive' : 'text-muted-foreground'}`}>{subtitle}</p>
-                    {!isBusy && uploadState !== 'success' && <span className="mt-4 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm">Choose .cast file</span>}
+                    {!isBusy && <span className="mt-4 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm">Choose .cast file</span>}
                 </div>
             </div>
             {analysisJobs.errorMessage && jobs.length > 0 && !isAuthenticationExpired && (
@@ -207,6 +140,20 @@ export function UploadTile({ onUploadSuccess }: UploadTileProperties) {
                     onDismiss={() => analysisJobs.dismissJob(job.id)}
                 />
             ))}
+            {uploaded && (
+                <AnalysisDialog
+                    sessionId={uploaded.id}
+                    title={uploaded.title}
+                    onAnnotateManually={() => router.push(`/sessions/${uploaded.id}`)}
+                    onStarted={(job) => {
+                        setUploaded(null);
+                        // A background job shows its progress here; a finished analysis opens the editor.
+                        if (job) analysisJobs.addJob(job);
+                        else router.push(`/sessions/${uploaded.id}`);
+                    }}
+                    onClose={() => setUploaded(null)}
+                />
+            )}
         </div>
     );
 }

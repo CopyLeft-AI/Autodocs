@@ -2,7 +2,8 @@
 import { AppShell } from '@/app/components/AppShell';
 import { UploadTile } from '@/app/components/UploadTile';
 import { SessionTile } from '@/app/components/SessionTile';
-import { SessionDetailModal } from '@/app/components/SessionDetailModal';
+import { readLastSession, forgetSession, type LastSession } from '@/app/lib/editor/resume';
+import Link from 'next/link';
 import { getSessionUser } from '@/app/lib/auth';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -14,6 +15,7 @@ export interface ApiSession {
   durationSeconds: number;
   content: string;
   createdAt: string;
+  annotationCount?: number;
 }
 
 // Shape returned by /api/terminal-sessions/shared
@@ -31,6 +33,7 @@ export interface Session {
   duration: string;
   content: string;
   createdAt: string;
+  annotationCount?: number;
   // Present only for shared sessions
   owner?: { id: string; name: string; email: string };
   sharedAt?: string | null;
@@ -82,8 +85,10 @@ export default function App() {
   const [loadingShared, setLoadingShared] = useState(false);
   const [sharedError, setSharedError] = useState<string | null>(null);
 
-  const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [lastSession, setLastSession] = useState<LastSession | null>(null);
+
+  // Browser storage exists only after the first render in the browser.
+  useEffect(() => { setLastSession(readLastSession()); }, []);
 
   useEffect(() => {
     const run = async () => {
@@ -114,6 +119,7 @@ export default function App() {
           duration: formatDuration(s.durationSeconds),
           content: s.content,
           createdAt: formatDate(s.createdAt),
+          annotationCount: s.annotationCount,
         }))
       );
     } catch (err) {
@@ -157,15 +163,7 @@ export default function App() {
     void fetchSharedSessions();
   }, [checkingAuth]);
 
-  const handleSessionClick = (session: Session) => {
-    setSelectedSession(session);
-    setIsModalOpen(true);
-  };
-
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedSession(null);
-  };
+  const openSession = (session: Session) => router.push(`/sessions/${session.id}`);
 
   /** Deletes an owned session; throws on failure so the caller can show the error. */
   const deleteSession = async (sessionId: string) => {
@@ -179,11 +177,8 @@ export default function App() {
     }
 
     setSessions((current) => current.filter((session) => session.id !== sessionId));
-  };
-
-  const handleDeleteSession = async (sessionId: string) => {
-    await deleteSession(sessionId);
-    handleCloseModal();
+    forgetSession(sessionId);
+    setLastSession(readLastSession());
   };
 
   return (
@@ -193,8 +188,13 @@ export default function App() {
         <div className="mb-6">
           <h1 className="text-foreground mb-1">Terminal Sessions</h1>
           <p className="text-muted-foreground">
-            Upload and explore hierarchical event logs from your terminal sessions
+            Upload terminal recordings, annotate them yourself or with a model, and explore them
           </p>
+          {lastSession && (
+            <Link href={`/sessions/${lastSession.id}`} className="mt-2 inline-block text-sm text-primary underline">
+              Continue where you left off: {lastSession.title}
+            </Link>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -218,7 +218,7 @@ export default function App() {
             <SessionTile
               key={session.id}
               session={session}
-              onClick={() => handleSessionClick(session)}
+              onClick={() => openSession(session)}
               onDelete={deleteSession}
             />
           ))}
@@ -253,18 +253,11 @@ export default function App() {
             <SessionTile
               key={session.id}
               session={session}
-              onClick={() => handleSessionClick(session)}
+              onClick={() => openSession(session)}
             />
           ))}
         </div>
       </section>
-
-      <SessionDetailModal
-        isOpen={isModalOpen}
-        onClose={handleCloseModal}
-        session={selectedSession}
-        onDeleteSession={handleDeleteSession}
-      />
     </AppShell>
   );
 }
