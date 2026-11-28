@@ -51,9 +51,17 @@ describe('reading recordings', () => {
   });
 
   test('titles drop recording extensions and keep unusual characters', () => {
-    expect(titleFromFileName('apt_upgrade-broken_X-date +%s')).toBe('apt_upgrade-broken_X-date +%s');
     expect(titleFromFileName('session.annotated.cast')).toBe('session');
     expect(titleFromFileName('.cast')).toBe('recording');
+  });
+
+  test('titles replace a `date +%s` the shell never ran with the recording time', () => {
+    for (const name of ['apt_upgrade-broken_X-`date +%s`.cast', 'apt_upgrade-broken_X-$(date +%s).rec', 'apt_upgrade-broken_X-date +%s']) {
+      expect(titleFromFileName(name, 1795121244)).toBe('apt_upgrade-broken_X-1795121244');
+      expect(titleFromFileName(name)).toBe('apt_upgrade-broken_X');
+    }
+    expect(titleFromFileName('`date +%s`.rec')).toBe('recording');
+    expect(titleFromFileName('update-notes +%s.cast', 5)).toBe('update-notes +%s');
   });
 
   test('every sample recording in the repository can be read', async () => {

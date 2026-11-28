@@ -107,8 +107,19 @@ export function toVersion2(recording: Recording): string {
   return `${[JSON.stringify(header), ...lines].join('\n')}\n`;
 }
 
-/** Session title for an uploaded file: the name without a recording extension. */
-export function titleFromFileName(fileName: string): string {
-  const title = fileName.replace(/\.(cast|asciicast|rec|json|annotated|asciinema)(?=$|\.)/gi, '').trim();
+/** `date +%s` left in a file name: the quoting of the record command stopped the shell from running it. */
+const UNRUN_DATE_COMMAND = /\$\(\s*date \+%s\s*\)|`?date \+%s`?/g;
+
+/**
+ * Session title for an uploaded file: the name without a recording extension.
+ * An unrun `date +%s` becomes the time stored in the recording (Unix seconds,
+ * what the command would have printed), or is dropped when there is none.
+ */
+export function titleFromFileName(fileName: string, recordedAt?: unknown): string {
+  const seconds = typeof recordedAt === 'number' && Number.isFinite(recordedAt) ? String(Math.floor(recordedAt)) : '';
+  let title = fileName.replace(/\.(cast|asciicast|rec|json|annotated|asciinema)(?=$|\.)/gi, '');
+  const dated = title.replace(UNRUN_DATE_COMMAND, seconds);
+  if (dated !== title) title = seconds ? dated : dated.replace(/[\s_-]+$/, '');
+  title = title.trim();
   return title || 'recording';
 }

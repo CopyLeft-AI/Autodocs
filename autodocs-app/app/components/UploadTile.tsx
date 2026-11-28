@@ -33,7 +33,7 @@ async function readRecording(file: File): Promise<{ title: string; content: stri
         throw new Error(parsed.error);
     }
 
-    return { title: titleFromFileName(file.name), content };
+    return { title: titleFromFileName(file.name, parsed.recording.header.timestamp), content };
 }
 
 /**

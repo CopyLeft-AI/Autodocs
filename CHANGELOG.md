@@ -48,6 +48,7 @@ All notable changes to this project are documented here, following
 - Failed or cancelled analyses can be deleted from their own panel.
 
 ### Fixed
+- A recording whose file name still contains an unrun `date +%s` is titled with its recording time instead of the command text (applies to new uploads). Long titles wrap inside window headers.
 - Recordings without a `.cast` extension, in asciicast v3 format or with a cut-off last line can be uploaded.
 - Older sessions without a stored file replay from their stored events instead of showing "original content unavailable" where events were kept (without colours or exact layout).
 - The single sign-on routes are described in the API documentation.

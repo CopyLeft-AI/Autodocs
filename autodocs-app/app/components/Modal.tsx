@@ -14,8 +14,8 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   return (
     <dialog ref={dialog} aria-label={title} onCancel={(event) => { event.preventDefault(); onClose(); }}
       className="m-auto w-[min(34rem,92vw)] rounded-xl border border-border bg-card p-0 text-foreground backdrop:bg-black/70">
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <h2 className="text-base">{title}</h2>
+      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
+        <h2 className="min-w-0 break-words text-base">{title}</h2>
         <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"><IconX size={18} /></button>
       </div>
       <div className="p-5">{children}</div>
