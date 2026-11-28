@@ -59,7 +59,8 @@ web app; each annotation records `llamacpp` and the model names above.
 Checked on an ordinary x86 PC, CPU only, with llama.cpp build 6097:
 `start-llama-servers.sh` and `config.json` (ports changed) served a stock 4B
 Qwen3 instruct model for both steps, and the analysis service completed a
-two-command recording (4 boundary chunks, 4 summaries) in about 7 minutes.
+two-command recording (4 boundary chunks, 4 summaries). It ran at lowered
+scheduling priority on a shared machine, so its duration is not a speed figure.
 
 Not run: merging and conversion with the real Model 0 adapter, inference with
 the fine-tuned Model 0 or with `gpt-oss-20b`, and anything on the Phi. The
