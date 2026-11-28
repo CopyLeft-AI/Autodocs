@@ -56,5 +56,11 @@ web app; each annotation records `llamacpp` and the model names above.
 
 ## Status
 
-The scripts were checked with a stand-in server. Merging, conversion and
-inference with the real model files have not been run on this package.
+Checked on an ordinary x86 PC, CPU only, with llama.cpp build 6097:
+`start-llama-servers.sh` and `config.json` (ports changed) served a stock 4B
+Qwen3 instruct model for both steps, and the analysis service completed a
+two-command recording (4 boundary chunks, 4 summaries) in about 7 minutes.
+
+Not run: merging and conversion with the real Model 0 adapter, inference with
+the fine-tuned Model 0 or with `gpt-oss-20b`, and anything on the Phi. The
+output quality of this check says nothing about the real models.
