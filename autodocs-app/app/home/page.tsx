@@ -163,6 +163,9 @@ export default function App() {
     void fetchSharedSessions();
   }, [checkingAuth]);
 
+  // The browser remembers the last session for whoever used it, so only offer one this account can open.
+  const canResume = lastSession !== null && [...sessions, ...sharedSessions].some((session) => session.id === lastSession.id);
+
   const openSession = (session: Session) => router.push(`/sessions/${session.id}`);
 
   /** Deletes an owned session; throws on failure so the caller can show the error. */
@@ -190,7 +193,7 @@ export default function App() {
           <p className="text-muted-foreground">
             Upload terminal recordings, annotate them yourself or with a model, and explore them
           </p>
-          {lastSession && (
+          {lastSession && canResume && (
             <Link href={`/sessions/${lastSession.id}`} className="mt-2 inline-block text-sm text-primary underline">
               Continue where you left off: {lastSession.title}
             </Link>
