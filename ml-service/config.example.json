@@ -16,6 +16,7 @@
     "annotate": {
       "backend": "openai",
       "model": "gpt-4o-mini",
+      "alternativeModels": "gpt-4o",
       "baseUrl": "https://api.openai.com/v1",
       "apiKey": "sk-...",
       "timeoutSeconds": 600,

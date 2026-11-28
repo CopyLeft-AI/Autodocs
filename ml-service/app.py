@@ -5,7 +5,8 @@ Implements the same contract the notebook's Flask sketch intended
 pipeline stages, and calling local Ollama-served models instead of Colab.
 
 Response contract (verified against autodocs-app/app/api/terminal-sessions/route.ts):
-  {"title": <str>, "content": [<JSON string of {"idx","depth","summary"}>, ...]}
+  {"title": <str>, "content": [<JSON string of {"idx","depth","summary","xml"}>, ...],
+   "models": {"boundaries": {"backend","model"}, "annotate": {...}}}
 content must be an array of JSON-encoded STRINGS, not objects -- the Next.js
 route does JSON.parse() on each element itself.
 """
@@ -28,6 +29,7 @@ import parser0
 import restructure
 from concurrency import MAX_PARALLEL_REQUESTS
 from job_metrics import estimate_remaining_seconds
+from job_options import JobOptions, apply_options, models_used
 from job_runner import JobRunner
 from job_store import JobStore
 from resources import ResourceSampler
@@ -70,11 +72,13 @@ app = FastAPI(title="autodocs-ml-service", version="1.0.0", description=API_DESC
 class RecordingRequest(BaseModel):
     title: str
     content: str
+    options: JobOptions | None = None
 
 
 class RecordingResponse(BaseModel):
     title: str
     content: list[str]
+    models: dict
 
 
 class JobRequest(RecordingRequest):
@@ -121,7 +125,8 @@ async def health():
 @app.post("/jobs", tags=["Analysis jobs"], summary="Queue a recording for analysis")
 async def create_job(body: JobRequest):
     try:
-        state = await job_store.create(body.jobId, body.title, body.content, body.parallelRequests)
+        options = body.options.model_dump(exclude_none=True) if body.options else None
+        state = await job_store.create(body.jobId, body.title, body.content, body.parallelRequests, options)
     except OSError as error:
         raise HTTPException(status_code=500, detail=f"Could not persist upload job: {error}") from error
     await job_runner.enqueue(body.jobId)
@@ -182,8 +187,10 @@ async def process_recording(body: RecordingRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"parser0 failed: {e}") from e
 
+    options = body.options.model_dump(exclude_none=True) if body.options else None
+    boundary_step, annotate_step = apply_options(service_config.load_config(), options)
     async with httpx.AsyncClient() as client:
-        new_event_timestamps = await model0.find_new_event_timestamps(flat_xml, client)
+        new_event_timestamps = await model0.find_new_event_timestamps(flat_xml, client, step=boundary_step)
         logger.info("model0: %d new-event boundaries", len(new_event_timestamps))
 
         event_xml = restructure.restructure_xml_to_events(flat_xml, new_event_timestamps)
@@ -194,15 +201,15 @@ async def process_recording(body: RecordingRequest):
 
         try:
             events = model1.load_events(event_xml_path)
-            preds = await model1.annotate_events(events, client)
+            preds = await model1.annotate_events(events, client, step=annotate_step)
         finally:
             Path(event_xml_path).unlink(missing_ok=True)
 
     logger.info("model1: annotated %d/%d events", len(preds), len(events))
 
     content = [
-        json.dumps({"idx": idx, "depth": v["depth"], "summary": v["summary"]})
+        json.dumps({"idx": idx, "depth": v["depth"], "summary": v["summary"], "xml": events[idx].xml})
         for idx, v in sorted(preds.items())
     ]
 
-    return RecordingResponse(title=title, content=content)
+    return RecordingResponse(title=title, content=content, models=models_used(boundary_step, annotate_step))

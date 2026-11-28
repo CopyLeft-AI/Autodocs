@@ -6,6 +6,8 @@ interface ShareBody {
   terminalSessionId?: string;
   targetUserId?: string;
   targetUserEmail?: string;
+  /** Let the person add and change annotations, not only read them. */
+  canAnnotate?: boolean;
 }
 
 function isUuid(value: string): boolean {
@@ -88,11 +90,13 @@ export async function POST(request: NextRequest) {
          terminal_session_id,
          owner,
          shared_at,
-         shared_by_user_id
+         shared_by_user_id,
+         can_annotate
        )
-       VALUES ($1, $2, FALSE, NOW(), $3)
+       VALUES ($1, $2, FALSE, NOW(), $3, $4)
        ON CONFLICT (user_id, terminal_session_id)
        DO UPDATE SET
+         can_annotate = EXCLUDED.can_annotate,
          owner = terminal_session_access.owner OR EXCLUDED.owner,
          shared_at = CASE
            WHEN terminal_session_access.owner THEN terminal_session_access.shared_at
@@ -102,7 +106,7 @@ export async function POST(request: NextRequest) {
            WHEN terminal_session_access.owner THEN terminal_session_access.shared_by_user_id
            ELSE EXCLUDED.shared_by_user_id
          END`,
-      [targetUser.id, terminalSessionId, user.id],
+      [targetUser.id, terminalSessionId, user.id, body.canAnnotate === true],
     );
 
     return NextResponse.json({

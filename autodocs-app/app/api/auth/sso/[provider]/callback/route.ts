@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { syncUserAtLogin } from '@/app/lib/server/ldap/service';
 import { issueSession } from '@/app/lib/server/session-auth';
 import { setSessionCookies } from '@/app/lib/server/session';
 import { resolvePublicBaseUrl } from '@/app/lib/server/sso/base-url';
@@ -26,6 +27,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ pro
       flowCookie: request.cookies.get(SSO_FLOW_COOKIE)?.value,
     });
     if (!outcome.ok) return loginRedirect(baseUrl, outcome.code);
+    await syncUserAtLogin(outcome.value);
     const { accessToken, refreshToken } = await issueSession(outcome.value);
     const response = NextResponse.redirect(new URL('/home', baseUrl));
     setSessionCookies(response, accessToken, refreshToken);

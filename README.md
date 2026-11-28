@@ -25,10 +25,10 @@ variables.
 
 For an opt-in local CPU deployment, this repository also includes
 [`ml-service/`](ml-service/). It uses local Ollama models for the two inference
-stages and exposes durable upload jobs. Enable that protocol only after the
+stages and exposes durable analysis jobs. Enable that protocol only after the
 service is running by setting `AUTODOCS_PROCESSING_MODE=local-cpu-jobs` in the
-web app. The upload interface then shows real stage counts, progress bars, and
-a timestamped event timeline; it safely resumes an in-progress upload after a
+web app. The interface then shows real stage counts, progress bars, and
+a timestamped event timeline; it safely resumes an in-progress analysis after a
 page reload. See the [web app setup guide](autodocs-app/README.md#local-cpu-inference-option)
 and the [ML service guide](ml-service/README.md) for installation and operation.
 

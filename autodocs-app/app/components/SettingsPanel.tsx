@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff, Gauge, KeyRound } from 'lucide-react';
+import { LdapAdmin } from '@/app/components/LdapAdmin';
 import { RightsAdmin } from '@/app/components/RightsAdmin';
 import { SsoProvidersAdmin } from '@/app/components/SsoProvidersAdmin';
 import { usePermissions } from '@/app/lib/use-permissions';
@@ -9,7 +10,7 @@ import { InferenceSettingsCard } from '@/app/components/InferenceSettingsCard';
 
 const MASKED_PASSWORD = '........';
 
-const TAB_LABELS = { general: 'General', users: 'Users', groups: 'Groups', sso: 'Single sign-on' } as const;
+const TAB_LABELS = { general: 'General', users: 'Users', groups: 'Groups', sso: 'Single sign-on', ldap: 'LDAP' } as const;
 
 function ChangeButton({ onClick }: { onClick?: () => void }) {
   return (
@@ -143,7 +144,7 @@ function ProcessingSettingsCard({ canEdit }: { canEdit: boolean }) {
 
 export function SettingsPanel() {
   const permissions = usePermissions();
-  const [tab, setTab] = useState<'general' | 'users' | 'groups' | 'sso'>('general');
+  const [tab, setTab] = useState<'general' | 'users' | 'groups' | 'sso' | 'ldap'>('general');
   const canEdit = permissions?.canEditSettings ?? false;
   const [isEditing, setIsEditing] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -213,7 +214,7 @@ export function SettingsPanel() {
 
       {permissions?.isAdmin && (
         <div className="mb-5 flex gap-2" role="tablist">
-          {(['general', 'users', 'groups', 'sso'] as const).map((id) => (
+          {(['general', 'users', 'groups', 'sso', 'ldap'] as const).map((id) => (
             <button
               key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
               className={`rounded-lg border px-4 py-2 text-sm transition-colors ${tab === id ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
@@ -226,6 +227,7 @@ export function SettingsPanel() {
 
       {permissions?.isAdmin && (tab === 'users' || tab === 'groups') && <RightsAdmin key={tab} view={tab} />}
       {permissions?.isAdmin && tab === 'sso' && <SsoProvidersAdmin />}
+      {permissions?.isAdmin && tab === 'ldap' && <LdapAdmin />}
 
       <div className="space-y-5" hidden={permissions?.isAdmin === true && tab !== 'general'}>
         <InferenceSettingsCard canEdit={canEdit} />

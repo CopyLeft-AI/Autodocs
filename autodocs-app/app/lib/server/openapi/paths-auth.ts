@@ -83,6 +83,7 @@ export const AUTH_PATHS: OpenApiPaths = {
         '200': jsonResponse('Email updated.', { type: 'object', properties: { message: STRING, user: ref('User') } }),
         '400': errorResponse('Invalid address, or the same as the current one.'),
         '401': errorResponse('Not signed in, or the current password is wrong.'),
+        '403': errorResponse('The account takes rights from the directory, which matches by email.'),
         '409': errorResponse('Another account already uses this email.'),
       },
     },

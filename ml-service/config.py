@@ -74,6 +74,7 @@ class ServiceConfig:
 # Field metadata shared by validation, the API schema and the UI.
 # name in file -> (kind, minimum, maximum)
 STEP_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
+    "alternativeModels": ("text", None, None),
     "backend": ("choice", None, None),
     "model": ("text", None, None),
     "baseUrl": ("text", None, None),

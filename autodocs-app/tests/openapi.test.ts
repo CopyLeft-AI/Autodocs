@@ -50,7 +50,7 @@ describe('the app API description matches the route files', () => {
     for (const [path, item] of Object.entries(OPENAPI_DOCUMENT.paths)) {
       const placeholders = [...path.matchAll(/\{(\w+)\}/g)].map((match) => match[1]);
       for (const [method, operation] of Object.entries(item)) {
-        const declared = (operation.parameters ?? []).map((parameter) => parameter.name);
+        const declared = (operation.parameters ?? []).filter((parameter) => parameter.in === 'path').map((parameter) => parameter.name);
         expect({ operation: `${method} ${path}`, declared: [...declared].sort() }).toEqual({ operation: `${method} ${path}`, declared: [...placeholders].sort() });
       }
     }

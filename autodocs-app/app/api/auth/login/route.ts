@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/app/lib/server/db';
+import { syncUserAtLogin } from '@/app/lib/server/ldap/service';
 import { issueSession, toClientUser } from '@/app/lib/server/session-auth';
 import { setSessionCookies } from '@/app/lib/server/session';
 
@@ -43,6 +44,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Invalid email or password.' }, { status: 401 });
     }
 
+    await syncUserAtLogin(user);
     const { accessToken, refreshToken } = await issueSession(user);
     const response = NextResponse.json({ user: toClientUser(user) });
     setSessionCookies(response, accessToken, refreshToken);

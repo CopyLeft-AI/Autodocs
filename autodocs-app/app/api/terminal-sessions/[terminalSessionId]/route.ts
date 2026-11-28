@@ -1,3 +1,5 @@
+import { signedIn, requireUuid } from '@/app/lib/server/recordings/http';
+import { getSessionDetail } from '@/app/lib/server/recordings/session-service';
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/app/lib/server/db';
 import { getRequestUser } from '@/app/lib/server/request-auth';
@@ -57,4 +59,11 @@ export async function DELETE(
   } catch {
     return NextResponse.json({ message: 'Failed to delete terminal session.' }, { status: 500 });
   }
+}
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ terminalSessionId: string }> }) {
+  return signedIn(request, async (user) => {
+    const sessionId = requireUuid((await params).terminalSessionId);
+    return NextResponse.json({ session: await getSessionDetail(user.id, sessionId) });
+  });
 }

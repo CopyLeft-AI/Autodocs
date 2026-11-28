@@ -126,16 +126,19 @@ export function SessionTile({ session, onClick, onDelete }: SessionTileProps) {
       <p className="text-sm text-muted-foreground mb-3">{createdAt}</p>
 
       {/* Event stats */}
-      <div className="flex items-center gap-2 mb-4">
+      {events.length > 0 && <div className="flex items-center gap-2 mb-4">
         <span className="text-xs text-muted-foreground font-mono">{events.length} events</span>
         <span className="text-border">·</span>
         <span className="text-xs text-emerald-400 font-mono">{eventCounts.independent} top-level</span>
         <span className="text-border">·</span>
         <span className="text-xs text-blue-400 font-mono">{eventCounts.sub} sub</span>
-      </div>
+      </div>}
+      {session.annotationCount !== undefined && (
+        <p className="-mt-2 mb-4 text-xs text-muted-foreground font-mono">{session.annotationCount} annotation{session.annotationCount === 1 ? '' : 's'}</p>
+      )}
 
       {/* Event preview list */}
-      <div className="bg-muted rounded-md p-3 space-y-2">
+      {events.length > 0 && <div className="bg-muted rounded-md p-3 space-y-2">
         {previewEvents.map((event: SessionEvent, i: number) => (
           <div key={i} className="flex items-start gap-2">
             <div className="mt-0.5 flex-shrink-0">
@@ -151,7 +154,7 @@ export function SessionTile({ session, onClick, onDelete }: SessionTileProps) {
             +{events.length - 3} more events...
           </p>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

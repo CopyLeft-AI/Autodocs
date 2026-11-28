@@ -69,6 +69,49 @@ docker exec -it autodocs-postgres psql -U autodocs -d autodocs -c "\d terminal_s
 docker exec -it autodocs-postgres psql -U autodocs -d autodocs -c "\d terminal_session_access"
 ```
 
+## Annotating recordings
+
+Uploading stores the `.cast` file (asciicast v1, v2 or v3, 50 MB at most) and
+asks how to annotate it: by hand in the editor, or with a model whose name and
+settings you choose. People without the settings right can pick the configured
+models and those listed under "Other models users may pick". Each model run adds
+a timeline; nothing is overwritten.
+
+The editor is at `/sessions/<id>`. Mark A and B, press C and type. F shows only
+what the selected range wrote to the terminal. Every annotation keeps its origin
+(person, model or imported file) and last editor, and the History tab lists all
+changes. The owner can share a session read-only or allow annotating.
+
+| API | Purpose |
+| --- | --- |
+| `GET/DELETE /api/terminal-sessions/<id>` | Session with timelines and annotations; delete |
+| `GET .../recording[?annotations=1]` | Download the file, optionally with annotations in its header |
+| `POST .../analysis`, `GET /api/analysis-options` | Run a model; list the choices |
+| `.../annotations`, `.../layers`, `.../history` | Edit annotations and timelines; read changes |
+
+Existing databases need `db/init/010_annotations.sql`. Sessions created before it
+have no stored file: their replay is rebuilt from the stored events, without
+colours. Sessions with no stored events cannot be replayed.
+
+Where things live: `app/lib/cast` reads recordings, `app/lib/terminal` replays
+and colours them, `app/lib/editor` and `app/components/editor` are the editor,
+`app/lib/annotations` holds shared types and file formats, and
+`app/lib/server/recordings` owns storage, permissions and analyses.
+
+## LDAP groups (optional)
+
+Administrators can copy group memberships from an LDAP directory (Settings,
+"LDAP"). A person is found by email; their groups are refreshed at each sign-in
+and by "Synchronise everyone now". Directory groups are created without rights,
+and a directory group whose name matches a local group is ignored, so grant
+rights in the Groups tab. Rights apply only to users set to take rights from
+groups. Because signup does not verify email addresses, switch a user to group
+rights only once their account is known to be theirs. While the directory is
+enabled, an account that takes rights from groups, or has directory groups,
+cannot change its own email. Use `ldaps://` or StartTLS.
+The bind password is stored encrypted with the same key as single sign-on
+secrets. Existing databases need `db/init/011_ldap.sql`.
+
 ## User rights
 
 Each user is either a user or an administrator, and users have a separate
@@ -127,8 +170,8 @@ Existing databases need `db/init/009_sso.sql`. Notes:
 
 ## Local CPU inference option
 
-The original `ML_URL` behavior remains the default: uploads call the legacy
-`POST /` ML endpoint and wait for its response. This is compatible with the
+The original `ML_URL` behavior remains the default: running a model calls the
+legacy `POST /` ML endpoint and waits for its response. This is compatible with the
 hosted Colab/ngrok pipeline.
 
 To opt into local CPU inference with durable, observable uploads:
@@ -148,7 +191,7 @@ To opt into local CPU inference with durable, observable uploads:
    AUTODOCS_PROCESSING_MODE="local-cpu-jobs"
    ```
 
-4. Start the web app normally. New uploads return immediately with a persisted
+4. Start the web app normally. Model runs return immediately with a persisted
    job ID, and the UI shows parsing, boundary detection, event grouping,
    annotation, and finalization progress with a timestamped event log.
 
