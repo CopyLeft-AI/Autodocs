@@ -76,7 +76,8 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [resumedAt, setResumedAt] = useState<number | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [createHint, setCreateHint] = useState(false);
+  // The playhead position at which an empty range was refused; the hint goes once that changes.
+  const [emptyAt, setEmptyAt] = useState<number | null>(null);
   const textReference = useRef<HTMLTextAreaElement>(null);
   const focusNewText = useRef<string | null>(null);
 
@@ -127,11 +128,11 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
     if (readOnly || !layerId) return;
     const first = rangeA ?? 0;
     const second = rangeB ?? timeMs;
-    if (first === second) { setCreateHint(true); return; }
+    if (first === second) { setEmptyAt(timeMs); return; }
     pause();
     const created = await actions.createAnnotation({ layerId, startMs: Math.min(first, second), endMs: Math.max(first, second), text: '', depth: 0 });
     if (!created) return;
-    setCreateHint(false);
+    setEmptyAt(null);
     setRangeA(null);
     setRangeB(null);
     focusNewText.current = created.id;
@@ -256,10 +257,10 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
         </p>
       )}
       {session.recordingSource === 'reconstructed' && <p className="text-xs text-amber-300">The original file was not kept for this older session. The replay is rebuilt from its stored events, without colours or exact layout.</p>}
-      {createHint && <p role="alert" className="text-xs text-amber-200">The range is empty. Move the playhead, or set markers A and B apart, then annotate.</p>}
+      {emptyAt === timeMs && !hasMarkers && <p role="alert" className="text-xs text-amber-200">The range is empty. Move the playhead, or set markers A and B apart, then annotate.</p>}
       {ownJobs.length > 0 && (
         // Progress scrolls in its own box, so that the editor stays usable while a model runs.
-        <div className="max-h-[30vh] shrink-0 space-y-2 overflow-y-auto">
+        <div className="max-h-[20vh] shrink-0 space-y-2 overflow-y-auto">
           {ownJobs.map((job) => (
             <UploadProgressPanel key={job.id} job={job} isBusy={jobs.busyJobIds.has(job.id)} onControl={(action) => void jobs.controlJob(job.id, action)} onDelete={() => void jobs.deleteJob(job.id)} onDismiss={() => jobs.dismissJob(job.id)} />
           ))}
@@ -267,7 +268,7 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
       )}
       {jobs.errorMessage && <p role="alert" className="text-xs text-destructive">{jobs.errorMessage}</p>}
 
-      <div className="flex min-h-[16rem] flex-1 gap-2">
+      <div className="flex min-h-[10rem] flex-1 gap-2">
         <section aria-label="Replay" className="flex min-w-0 flex-1 flex-col gap-2">
           {recording
             ? <TerminalView recording={recording} timeMs={timeMs} focus={focus} hideMuted={hideMuted} />

@@ -33,7 +33,7 @@ export async function saveAnalysisResult(
   const events = readResultEvents(result.content);
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
   await insertAnnotatedLayer(client, sessionId, {
-    title: `AI ${models.annotate?.model ?? 'analysis'} ${stamp}`,
+    title: `AI ${models.annotate?.model ?? 'analysis'} ${stamp} UTC`,
     annotations: timeAnalysisEvents(events, session.durationSeconds * 1000),
   }, { origin: 'ai', actor, models });
   // The event list kept for the session overview shows the latest analysis.
