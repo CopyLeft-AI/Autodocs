@@ -18,7 +18,10 @@ async function requireLayer(client: PoolClient, sessionId: string, layerId: stri
   return layer;
 }
 
-const excerpt = (text: string): string => `"${text.length > 60 ? `${text.slice(0, 57)}...` : text}"`;
+const excerpt = (text: string): string => {
+  if (!text) return 'an annotation with no text yet';
+  return `"${text.length > 60 ? `${text.slice(0, 57)}...` : text}"`;
+};
 
 export async function createAnnotation(actor: Actor, sessionId: string, body: Record<string, unknown>): Promise<Annotation> {
   const input: AnnotationInput = parseAnnotationInput(body);

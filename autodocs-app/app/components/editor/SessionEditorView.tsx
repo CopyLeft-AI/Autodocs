@@ -76,6 +76,7 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [resumedAt, setResumedAt] = useState<number | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [createHint, setCreateHint] = useState(false);
   const textReference = useRef<HTMLTextAreaElement>(null);
   const focusNewText = useRef<string | null>(null);
 
@@ -126,9 +127,11 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
     if (readOnly || !layerId) return;
     const first = rangeA ?? 0;
     const second = rangeB ?? timeMs;
+    if (first === second) { setCreateHint(true); return; }
     pause();
     const created = await actions.createAnnotation({ layerId, startMs: Math.min(first, second), endMs: Math.max(first, second), text: '', depth: 0 });
     if (!created) return;
+    setCreateHint(false);
     setRangeA(null);
     setRangeB(null);
     focusNewText.current = created.id;
@@ -253,9 +256,15 @@ function Workspace({ editor, session }: { editor: SessionEditor; session: NonNul
         </p>
       )}
       {session.recordingSource === 'reconstructed' && <p className="text-xs text-amber-300">The original file was not kept for this older session. The replay is rebuilt from its stored events, without colours or exact layout.</p>}
-      {ownJobs.map((job) => (
-        <UploadProgressPanel key={job.id} job={job} isBusy={jobs.busyJobIds.has(job.id)} onControl={(action) => void jobs.controlJob(job.id, action)} onDelete={() => void jobs.deleteJob(job.id)} onDismiss={() => jobs.dismissJob(job.id)} />
-      ))}
+      {createHint && <p role="alert" className="text-xs text-amber-200">The range is empty. Move the playhead, or set markers A and B apart, then annotate.</p>}
+      {ownJobs.length > 0 && (
+        // Progress scrolls in its own box, so that the editor stays usable while a model runs.
+        <div className="max-h-[30vh] shrink-0 space-y-2 overflow-y-auto">
+          {ownJobs.map((job) => (
+            <UploadProgressPanel key={job.id} job={job} isBusy={jobs.busyJobIds.has(job.id)} onControl={(action) => void jobs.controlJob(job.id, action)} onDelete={() => void jobs.deleteJob(job.id)} onDismiss={() => jobs.dismissJob(job.id)} />
+          ))}
+        </div>
+      )}
       {jobs.errorMessage && <p role="alert" className="text-xs text-destructive">{jobs.errorMessage}</p>}
 
       <div className="flex min-h-[16rem] flex-1 gap-2">
